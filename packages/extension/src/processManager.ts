@@ -50,6 +50,10 @@ export class ProcessManager {
     return this.running.has(folder);
   }
 
+  getChild(folder: string): ChildProcess | undefined {
+    return this.running.get(folder)?.child;
+  }
+
   async stop(folder: string): Promise<void> {
     const running = this.running.get(folder);
     if (!running) {
@@ -76,10 +80,12 @@ export class ProcessManager {
     });
 
     child.kill("SIGTERM");
-
-    // If kill() returned false (already dead), the event may never re-fire
-    // on a process that already detached; resolve defensively.
     await Promise.race([exited, delayMs(2000)]);
+    // Escalate if the process ignored SIGTERM and is somehow still alive.
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await exited;
+    }
   }
 
   async stopAll(): Promise<void> {

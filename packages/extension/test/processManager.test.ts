@@ -78,10 +78,13 @@ describe("ProcessManager", () => {
     const folder = tmpFolder();
 
     await pm.start(folder);
+    const child = pm.getChild(folder)!;
     expect(pm.hasRunning(folder)).toBe(true);
 
     await pm.stop(folder);
     expect(pm.hasRunning(folder)).toBe(false);
+    expect(pm.getChild(folder)).toBeUndefined();
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
 
     // second stop must not throw
     await pm.stop(folder);
