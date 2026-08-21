@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { InboundMessage, OutboundMessage } from "@dsh-vscode/contract";
+import { isInboundMessage } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
 import type { ProtocolClient } from "../protocolClient.js";
 import { nextStatus, type DshState } from "../statusBar.js";
@@ -23,14 +24,24 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
-    view.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
-    view.webview.html = this.renderHtml();
-    view.webview.onDidReceiveMessage((msg: InboundMessage) => this.onUiCommand(msg));
+    const nonce = this.newNonce();
+    view.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri],
+    };
+    view.webview.html = this.renderHtml(view.webview, nonce);
+    view.webview.onDidReceiveMessage((msg: unknown) => this.onUiCommand(msg));
   }
 
-  onUiCommand(msg: InboundMessage): void {
+  onUiCommand(msg: unknown): void {
+    // Webview -> extension: { type: "dsh/ui", cmd: InboundMessage }
+    if (typeof msg !== "object" || msg === null || !("type" in msg)) return;
+    const type = (msg as { type?: unknown }).type;
+    if (type !== "dsh/ui") return;
+    const cmd = (msg as { cmd?: unknown }).cmd;
+    if (!isInboundMessage(cmd)) return;
     if (!this.running) return;
-    this.running.client.send(msg);
+    this.running.client.send(cmd);
   }
 
   async startActiveFolder(): Promise<void> {
@@ -64,7 +75,40 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private renderHtml(): string {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body>DSH repl placeholder</body></html>`;
+  private renderHtml(webview: vscode.Webview, nonce: string): string {
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "webview.js"),
+    );
+    const styleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "dist", "style.css"),
+    );
+    // CSP: allow only the bundled script (nonce-bearer) and the webview resource
+    // origin; no inline scripts; styles/self limited to the webview host.
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+  />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="${styleUri}" />
+</head>
+<body>
+  <div id="root"></div>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+
+  private newNonce(): string {
+    let text = "";
+    const possible =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    for (let i = 0; i < 32; i++) {
+      text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
   }
 }

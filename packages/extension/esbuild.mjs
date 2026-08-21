@@ -1,11 +1,9 @@
 import { build } from "esbuild";
-import { existsSync } from "node:fs";
+import { copyFileSync, mkdirSync } from "node:fs";
 
-if (!existsSync(new URL("./src/extension.ts", import.meta.url))) {
-  console.log("no src/extension.ts yet; skipping bundle");
-  process.exit(0);
-}
+mkdirSync("dist", { recursive: true });
 
+// Extension host bundle (Node) — the VS Code extension entry.
 await build({
   entryPoints: ["src/extension.ts"],
   bundle: true,
@@ -16,3 +14,18 @@ await build({
   external: ["vscode"],
   sourcemap: true,
 });
+
+// Webview bundle (browser) — the React chat UI.
+await build({
+  entryPoints: ["src/webview/media/main.tsx"],
+  bundle: true,
+  outfile: "dist/webview.js",
+  format: "iife",
+  platform: "browser",
+  target: "es2020",
+  jsx: "automatic",
+  sourcemap: true,
+});
+
+// Static webview stylesheet (plain copy; referenced by panel.ts via asWebviewUri).
+copyFileSync("src/webview/media/style.css", "dist/style.css");
