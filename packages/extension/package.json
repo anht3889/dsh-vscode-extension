@@ -14,7 +14,7 @@
     "url": "https://github.com/your-org/dsh-vscode-extension.git"
   },
   "homepage": "https://github.com/your-org/dsh-vscode-extension#readme",
-  "readme": "../../README.md",
+  "readme": "README.md",
   "activationEvents": ["onView:dsh.chat", "onCommand:dsh.start"],
   "contributes": {
     "commands": [
