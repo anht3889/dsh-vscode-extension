@@ -25,6 +25,6 @@
     }
   },
   "dependencies": { "@dsh-vscode/contract": "workspace:*" },
-  "devDependencies": { "@types/vscode": "^1.90.0", "esbuild": "^0.21.0", "typescript": "^5", "vitest": "^3" },
+  "devDependencies": { "@types/node": "^20.14.0", "@types/vscode": "^1.90.0", "esbuild": "^0.21.0", "typescript": "^5", "vitest": "^3" },
   "scripts": { "build": "node esbuild.mjs", "test": "vitest run" }
 }
