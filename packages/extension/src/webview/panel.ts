@@ -132,15 +132,17 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "style.css"),
     );
-    // CSP: allow only the bundled script (nonce-bearer) and the webview resource
-    // origin; no inline scripts; styles/self limited to the webview host.
+    // CSP: the bundled script is an *external* resource, so `script-src` must
+    // allow the webview resource origin in addition to the nonce ('nonce' alone
+    // only authorises inline scripts). Allow images/fonts/connections to the same
+    // origin (plus data: images). default-src 'none' keeps everything else locked.
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+    content="default-src 'none'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}'; connect-src ${webview.cspSource} https:;"
   />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="${styleUri}" />
