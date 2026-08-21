@@ -67,6 +67,20 @@ describe("reduce", () => {
     expect(s.diffs).toEqual([]);
   });
 
+  it("resets stream and diffs on turn/start (per-turn accumulation)", () => {
+    const withDiffs = reduce(
+      initialState,
+      eventMsg("tool/result", {
+        meta: { path: "/x/a.ts", oldText: "a", newText: "b" },
+      }),
+    );
+    expect(withDiffs.diffs).toHaveLength(1);
+
+    const s = reduce(withDiffs, eventMsg("turn/start", {}));
+    expect(s.diffs).toEqual([]);
+    expect(s.stream).toEqual([]);
+  });
+
   it("returns the same state object for unhandled messages (no-op)", () => {
     const s = reduce(initialState, textChunk("x"));
     const same = reduce(s, { kind: "status", state: "idle" });

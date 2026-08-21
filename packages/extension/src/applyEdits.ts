@@ -1,3 +1,4 @@
+import { isAbsolute, join, resolve } from "node:path";
 import type { SessionEventWire, ToolDiff } from "@dsh-vscode/contract";
 // Type-only namespace import: erased at runtime (vitest never resolves `vscode`),
 // but provides the `vscode.*` type annotations used inside `applyDiffs`. The
@@ -72,6 +73,25 @@ export function diffsFromEvent(event: SessionEventWire): ToolDiff[] {
 // panel.ts treatment.
 
 /**
+ * Anchor a `ToolDiff.path` to the workspace folder root (pure; no `vscode`).
+ * `ToolDiff.path` comes from dsh-tool-fs / str-replace-editor and is emitted
+ * workspace-relative; `vscode.Uri.file()` otherwise resolves against the
+ * extension's process CWD (which is *not* the workspace folder), so relative
+ * paths must be joined to the workspace root before constructing a `Uri`. Absolute
+ * paths (already rooted) pass through unchanged. A `undefined` root means no
+ * workspace folder is open: the relative path is resolved against the process CWD
+ * as a fallback.
+ */
+export function resolveDiffPath(
+  path: string,
+  workspaceRoot: string | undefined,
+): string {
+  if (isAbsolute(path)) return path;
+  if (workspaceRoot !== undefined) return join(workspaceRoot, path);
+  return resolve(path);
+}
+
+/**
  * Convert each `ToolDiff` into a `WorkspaceEdit` replacement and apply it.
  * Uses a per-file range replace when `oldText` locates a unique span in the
  * current document, falling back to a full-document replace otherwise. A
@@ -81,9 +101,10 @@ export function diffsFromEvent(event: SessionEventWire): ToolDiff[] {
 export async function applyDiffs(diffs: ToolDiff[]): Promise<boolean> {
   const vscode = await import("vscode");
   const edit = new vscode.WorkspaceEdit();
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   for (const diff of diffs) {
-    const uri = vscode.Uri.file(diff.path);
+    const uri = vscode.Uri.file(resolveDiffPath(diff.path, workspaceRoot));
 
     let doc: vscode.TextDocument | undefined;
     try {

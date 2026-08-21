@@ -87,6 +87,12 @@ export function reduce(state: UiState, msg: OutboundMessage): UiState {
 
     case "event": {
       const type = msg.event.type;
+      if (type === "turn/start") {
+        // New turn: reset per-turn accumulation so a fresh turn does not re-render
+        // (or re-apply) the previous turn's diffs. Mirrors the extension host,
+        // which clears its own `pending` on `turn/start`.
+        return { ...state, stream: [], diffs: [] };
+      }
       if (type === "assistant/chunk" || type === "assistant/message") {
         const text = assistantText(msg.event.data);
         if (text !== undefined) {

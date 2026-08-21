@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { diffsFromEvent } from "../src/applyEdits.js";
+import { resolve as resolvePath } from "node:path";
+import { diffsFromEvent, resolveDiffPath } from "../src/applyEdits.js";
 import type { SessionEventWire } from "@dsh-vscode/contract";
 
 // Typed fixtures mirroring the real SessionEventWire shape (no `as any`).
@@ -56,5 +57,23 @@ describe("diffsFromEvent", () => {
     expect(diffsFromEvent(ev)).toEqual([
       { path: "/x/b.ts", oldText: "x", newText: "y" },
     ]);
+  });
+});
+
+describe("resolveDiffPath", () => {
+  const root = "/Users/me/project";
+
+  it("passes absolute paths through unchanged", () => {
+    expect(resolveDiffPath("/x/a.ts", root)).toBe("/x/a.ts");
+  });
+
+  it("joins workspace-relative paths to the workspace root", () => {
+    expect(resolveDiffPath("src/a.ts", root)).toBe("/Users/me/project/src/a.ts");
+  });
+
+  it("resolves relative paths against the process cwd when no root is given", () => {
+    expect(resolveDiffPath("src/a.ts", undefined)).toBe(
+      resolvePath("src/a.ts"),
+    );
   });
 });
