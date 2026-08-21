@@ -103,6 +103,46 @@ describe("createRunner (retained)", () => {
       await slow.close();
     }
   }, 120_000);
+
+  it("recovers after a rejected turn: emits status:error, then accepts a new submit", async () => {
+    const messages: OutboundMessage[] = [];
+    const io = capture(messages);
+    const ctx = await bootTree({
+      baseURL: mock.baseURL,
+      provider: "deepseek-official",
+      model: "mock-model",
+    });
+
+    const runner = await createRunner(ctx, io);
+
+    // Register a one-shot throwing session/flush listener so the FIRST submit's
+    // `sessions.flush(agent.session)` rejects, mirroring a failing persistence plugin.
+    let flushCalls = 0;
+    ctx.on("session/flush", () => {
+      flushCalls += 1;
+      if (flushCalls === 1) {
+        throw new Error("flush exploded");
+      }
+    });
+
+    runner.submit("a question whose flush will fail");
+    await waitFor(
+      () => messages.some((m) => m.kind === "status" && m.state === "error"),
+      60_000,
+    );
+    const errorStatus = messages.find(
+      (m) => m.kind === "status" && m.state === "error",
+    );
+    expect(errorStatus).toBeDefined();
+    expect((errorStatus as { detail?: string }).detail).toContain(
+      "flush exploded",
+    );
+
+    // Recovery: a second submit on the SAME runner must still produce a fresh turn/end.
+    runner.submit("a follow-up after recovery");
+    await waitFor(() => turnEnds(messages).length >= 1, 60_000);
+    expect(turnEnds(messages).length).toBeGreaterThanOrEqual(1);
+  }, 120_000);
 });
 
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {

@@ -50,4 +50,18 @@ describe("dispatchCommand", () => {
     // mapping is a passthrough: the provider receives the same answers array.
     expect(h.provider.resolve).toHaveBeenCalledWith("ask-1", answered);
   });
+
+  it("omits `custom` from the mapped answer when the wire answer carries none", () => {
+    const h = hooks();
+    const answered: AskAnswerWire = {
+      answers: [{ id: "q1", selected: ["yes"] }],
+    };
+    const msg: InboundMessage = { kind: "answer", askId: "ask-1", answered };
+    dispatchCommand(inertCtx, msg, h);
+
+    // The provider must receive the mapped answer WITHOUT a stray `custom: undefined` key.
+    const resolved = h.provider.resolve.mock.calls[0]?.[1];
+    expect(resolved).toEqual({ answers: [{ id: "q1", selected: ["yes"] }] });
+    expect("custom" in (resolved as { answers: unknown[] }).answers[0]).toBe(false);
+  });
 });

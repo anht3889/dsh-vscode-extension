@@ -171,9 +171,12 @@ export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner
         io.send({ kind: "status", state: "idle" });
       });
     tail = turn;
-    // Attach a no-op catch so a rejected turn never produces an unhandled
-    // rejection; the `session/event` relay already surfaces the failure.
-    turn.catch(() => {});
+    // A rejected turn must not poison the tail: surface the failure as a
+    // status:error, then reset the chain so later submits keep working.
+    turn.catch((error: unknown) => {
+      io.send({ kind: "status", state: "error", detail: String(error) });
+      tail = Promise.resolve();
+    });
   };
 
   const cancel = (): void => {
