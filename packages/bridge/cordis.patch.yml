@@ -1,0 +1,18 @@
+# The dsh-vscode bridge patch: a retained, stdio-driven runner over dsh-base.
+# Unlike dsh-headless (one-shot, exits after the task), this plugin keeps the
+# process alive and drives repeated submit/cancel commands over the stdio command
+# loop, relaying session events and user-question asks back to the editor.
+#
+# It rides directly over dsh-base, so it needs no Host, HTTP server, browser
+# plugin, or Web runtime. `appExit` is supplied by the launcher (not dsh-base);
+# the plugin reads it only when it reports a fatal startup error.
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model.
+
+- insert:
+    - id: vscode-runner
+      name: '@dsh-vscode/bridge'
+      inject: [agents, agentDefaultModel, sessions, userQuestions, appExit]
