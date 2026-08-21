@@ -18,6 +18,8 @@ export function toWire(event: SessionEvent): SessionEventWire {
     type: event.type,
     seq: event.seq,
     time: event.time,
+    // event.data is the concrete SessionEventMap[K] record; widening via unknown
+    // preserves the verbatim payload for the webview.
     data: event.data as unknown as SessionEventWire["data"],
   };
 }

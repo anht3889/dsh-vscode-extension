@@ -68,6 +68,8 @@ describe("runVscode", () => {
       expect(turnEnd.event.time).toBeTypeOf("number");
       expect(turnEnd.event.data).toBeTypeOf("object");
       expect(typeof turnEnd.sessionId).toBe("string");
+      expect(turnEnd.event.data.reason.kind).toBe("completed");
+      expect(typeof turnEnd.event.data.turn).toBe("number");
     }
 
     // And the runner must finish by reporting idle — not exit the process.
