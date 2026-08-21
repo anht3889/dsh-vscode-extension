@@ -3,6 +3,12 @@
 // It is launched by `src/test/e2e.run.ts` (the driver) via
 // `@vscode/test-electron`'s `runTests`; see the `test:e2e` npm script.
 //
+// This suite is compiled to CommonJS (`dist-test/e2e.test.cjs`) by
+// `e2e-build.mjs`: `runTests` requires `--extensionTestsPath` to expose a
+// `run` export, and a CJS bundle is version-proof across VS Code Extension Dev
+// Host loaders (the package is `"type":"module"`, so an `.mjs`/ESM test file
+// would be rejected at load time). See the `export { run }` at the end of file.
+//
 // Requires, at run time:
 //   * a real display (a headless sandbox / CI without X is not sufficient), and
 //   * a `dsh` binary discoverable on PATH, or `dsh.binaryPath` set in settings
@@ -31,7 +37,7 @@ function findExtension(): vscode.Extension<unknown> | undefined {
   return undefined;
 }
 
-export async function run(): Promise<void> {
+async function run(): Promise<void> {
   // 1. Activate the extension and confirm it came up without throwing.
   const ext = findExtension();
   assert.ok(ext, `DSH extension not found (tried: ${CANDIDATE_IDS.join(", ")})`);
@@ -56,3 +62,8 @@ export async function run(): Promise<void> {
   // 4. Tear down whatever session `start` created.
   await vscode.commands.executeCommand("dsh.stop");
 }
+
+// CJS `run` export: `@vscode/test-electron`'s `runTests` loads this bundled
+// file and calls `run()`. esbuild's CJS output turns this into
+// `exports.run = run` (no ESM markers), which is what the Dev Host expects.
+export { run };

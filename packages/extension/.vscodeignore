@@ -1,0 +1,22 @@
+# Files excluded from the packaged .vsix.
+# `vsce package` ships everything not ignored here; keep `dist/**` (the built
+# runtime bundle that MUST ship) and `resources/**` (the activity-bar icon).
+
+# source (TypeScript + tests) — not needed at runtime
+src/**
+test/**
+*.test.*
+*.spec.*
+
+# E2E build artifacts + tooling
+dist-test/**
+e2e-build.mjs
+
+# build/tooling config
+vitest.config.ts
+tsconfig.json
+tsconfig.e2e.json
+esbuild.mjs
+
+# deps (reinstalled by VS Code at runtime from `dependencies`)
+node_modules/**

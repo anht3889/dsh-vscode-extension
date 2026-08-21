@@ -14,5 +14,5 @@
     "outDir": "dist"
   },
   "include": ["src", "test"],
-  "exclude": ["src/test/e2e.run.ts"]
+  "exclude": ["src/test/e2e.run.ts", "src/test/e2e.test.ts"]
 }
