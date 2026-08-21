@@ -1,0 +1,30 @@
+{
+  "name": "@dsh-vscode/extension",
+  "displayName": "DSH",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "vscode": "^1.90.0" },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "dsh.start", "title": "DSH: Start", "category": "DSH" },
+      { "command": "dsh.stop", "title": "DSH: Stop", "category": "DSH" }
+    ],
+    "viewsContainers": {
+      "activitybar": [ { "id": "dsh", "title": "DSH", "icon": "resources/dsh.svg" } ]
+    },
+    "views": {
+      "dsh": [ { "type": "webview", "id": "dsh.chat", "name": "Chat" } ]
+    },
+    "configuration": {
+      "title": "DSH",
+      "properties": {
+        "dsh.binaryPath": { "type": "string", "default": "", "description": "Path to the dsh binary (empty = use PATH)." }
+      }
+    }
+  },
+  "dependencies": { "@dsh-vscode/contract": "workspace:*" },
+  "devDependencies": { "@types/vscode": "^1.90.0", "esbuild": "^0.21.0", "typescript": "^5", "vitest": "^3" },
+  "scripts": { "build": "node esbuild.mjs", "test": "vitest run" }
+}
