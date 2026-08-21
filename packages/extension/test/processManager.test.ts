@@ -44,6 +44,18 @@ function waitForMessage(
   });
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 5000
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("waitFor timed out");
+}
+
 describe("ProcessManager", () => {
   afterAll(() => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
@@ -57,6 +69,31 @@ describe("ProcessManager", () => {
       const hello = await waitForMessage(client, (m) => m.kind === "hello");
       expect(hello).toMatchObject({ kind: "hello", version: 1, dshVersion: "fake" });
       expect((hello as { cwd: string }).cwd).toBeTruthy();
+    } finally {
+      await stop();
+    }
+  });
+
+  it("relays child stderr to the onStderr sink", async () => {
+    const received: string[] = [];
+    const pm = new ProcessManager({
+      resolveBinary: () => "node",
+      argsFor: () => [fakeDsh],
+      onStderr: (t) => received.push(t),
+    });
+    const folder = tmpFolder();
+    const { client, stop } = await pm.start(folder);
+
+    try {
+      // Wait until the child is ready (its hello already arrived).
+      await waitForMessage(client, (m) => m.kind === "hello");
+      // Trigger a stderr write in the fake child via its raw stdin (the
+      // `stderr` trigger is a fixture-only keyword, not a protocol `InboundMessage`).
+      const child = pm.getChild(folder);
+      expect(child).toBeDefined();
+      child!.stdin!.write(JSON.stringify({ kind: "stderr" }) + "\n");
+      await waitFor(() => received.length >= 1, 5000);
+      expect(received).toContain("boom");
     } finally {
       await stop();
     }

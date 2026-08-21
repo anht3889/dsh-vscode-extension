@@ -20,5 +20,8 @@ rl.on("line", (line) => {
   if (m && m.kind === "exit") {
     process.exit(0);
   }
+  if (m && m.kind === "stderr") {
+    process.stderr.write("boom\n");
+  }
   out({ kind: "status", state: "idle" });
 });

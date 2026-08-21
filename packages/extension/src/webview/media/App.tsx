@@ -34,6 +34,7 @@ export function App(): JSX.Element {
     [post],
   );
   const cancel = useCallback((): void => post({ kind: "cancel" }), [post]);
+  const apply = useCallback((): void => post({ kind: "apply" }), [post]);
 
   return (
     <div className="dsh-root">
@@ -43,7 +44,7 @@ export function App(): JSX.Element {
           Cancel
         </button>
       </header>
-      <StreamView stream={state.stream} diffs={state.diffs} />
+      <StreamView stream={state.stream} diffs={state.diffs} onApply={apply} />
       {state.approval ? (
         <ApprovalBanner approval={state.approval} onAnswer={answer} />
       ) : null}

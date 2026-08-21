@@ -4,6 +4,8 @@ import { ProtocolClient } from "./protocolClient.js";
 export interface ProcessManagerOptions {
   resolveBinary(): string;
   argsFor(): string[];
+  /** Optional sink for the child's stderr (line-buffered, UTF-8). */
+  onStderr?(text: string): void;
 }
 
 interface RunningProcess {
@@ -35,6 +37,23 @@ export class ProcessManager {
     const stdin = child.stdin;
     if (!stdout || !stdin) {
       throw new Error("ProcessManager: child stdio streams unavailable");
+    }
+
+    // Surface the child's stderr via the optional sink (line-buffered) instead of
+    // silently discarding it (a crashing `dsh` writes its error here).
+    const stderr = child.stderr;
+    if (stderr && this.options.onStderr) {
+      let buf = "";
+      stderr.on("data", (chunk: Buffer) => {
+        buf += chunk.toString("utf8");
+        let newline = buf.indexOf("\n");
+        while (newline >= 0) {
+          const line = buf.slice(0, newline);
+          buf = buf.slice(newline + 1);
+          if (line.length > 0) this.options.onStderr!(line);
+          newline = buf.indexOf("\n");
+        }
+      });
     }
 
     const client = new ProtocolClient({ stdout, stdin });

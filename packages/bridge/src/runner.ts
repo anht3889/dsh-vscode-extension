@@ -5,6 +5,7 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
 import type { OutboundMessage, SessionEventWire } from "@dsh-vscode/contract";
+import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
 
 /**
@@ -123,6 +124,19 @@ export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner
   }
 
   const selection = defaultModel.currentSelection();
+
+  // Version handshake FIRST: the extension records `hello` (host-only, never
+  // forwarded to the webview) to learn PROTOCOL_VERSION / dshVersion / cwd /
+  // model and to verify protocol compatibility. Must precede the session/event
+  // listener registration and definitely precede `agents.create`.
+  io.send({
+    kind: "hello",
+    version: PROTOCOL_VERSION,
+    // keep in sync with packages/bridge/package.json
+    dshVersion: "0.1.0",
+    cwd: process.cwd(),
+    model: { provider: selection.provider, model: selection.model },
+  });
 
   // Relay the session firehose before creation so nothing — turn/start through
   // turn/end — is missed. Registered exactly once for the lifetime of the runner.

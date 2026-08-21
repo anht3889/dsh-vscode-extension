@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { AskUserQuestionAnswer } from "@deepseek-ai/dsh-user-questions";
-import type { Io, OutboundMessage } from "./io.js";
+import type { Io } from "./io.js";
+import type { OutboundMessage } from "@dsh-vscode/contract";
 import { createUserQuestionProvider } from "./user-questions.js";
 
 function makeIo(): { io: Io; sent: OutboundMessage[] } {

@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
-import type { InboundMessage, OutboundMessage } from "@dsh-vscode/contract";
-import { isInboundMessage } from "@dsh-vscode/contract";
+import type { HelloMessage, InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
+import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
 import type { ProtocolClient } from "../protocolClient.js";
+import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
+import { DecorationManager } from "../decorations.js";
 import { nextStatus, type DshState } from "../statusBar.js";
 
 interface Running {
@@ -13,13 +15,21 @@ interface Running {
 export class DshChatProvider implements vscode.WebviewViewProvider {
   private readonly extensionUri: vscode.Uri;
   private readonly pm: ProcessManager;
+  private readonly decorations: DecorationManager;
   private view: vscode.WebviewView | undefined;
   private running: Running | undefined;
   private status: DshState = "idle";
+  private hello: HelloMessage | undefined;
+  private pending: ToolDiff[] = [];
 
   constructor(extensionUri: vscode.Uri, pm: ProcessManager) {
     this.extensionUri = extensionUri;
     this.pm = pm;
+    this.decorations = new DecorationManager();
+  }
+
+  dispose(): void {
+    this.decorations.dispose();
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -34,14 +44,34 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   onUiCommand(msg: unknown): void {
-    // Webview -> extension: { type: "dsh/ui", cmd: InboundMessage }
+    // Webview -> extension: { type: "dsh/ui", cmd: InboundMessage | { kind: "apply" } }
     if (typeof msg !== "object" || msg === null || !("type" in msg)) return;
     const type = (msg as { type?: unknown }).type;
     if (type !== "dsh/ui") return;
     const cmd = (msg as { cmd?: unknown }).cmd;
+
+    // Host-local "apply": the extension owns the editor, so apply accumulated
+    // diffs here and never forward to the bridge.
+    if (
+      typeof cmd === "object" &&
+      cmd !== null &&
+      (cmd as { kind?: unknown }).kind === "apply"
+    ) {
+      void this.applyPending();
+      return;
+    }
+
     if (!isInboundMessage(cmd)) return;
     if (!this.running) return;
     this.running.client.send(cmd);
+  }
+
+  private async applyPending(): Promise<void> {
+    const ok = await applyDiffs(this.pending);
+    if (ok) {
+      this.decorations.markTouched(this.pending.map((d) => d.path));
+      this.pending = [];
+    }
   }
 
   async startActiveFolder(): Promise<void> {
@@ -63,6 +93,26 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   private handleOutbound(m: OutboundMessage): void {
+    // Version handshake is host-only: record it, do not forward to the webview.
+    if (m.kind === "hello") {
+      this.hello = m;
+      if (m.version !== PROTOCOL_VERSION) {
+        console.warn(
+          `[dsh] protocol version mismatch: bridge=${m.version} extension=${PROTOCOL_VERSION}`,
+        );
+      }
+      this.updateStatus(m);
+      return;
+    }
+
+    // Accumulate diffs from tool/result events (cleared on the next turn/start).
+    if (m.kind === "event") {
+      if (m.event.type === "turn/start") this.pending = [];
+      if (m.event.type === "tool/result") {
+        this.pending.push(...diffsFromEvent(m.event));
+      }
+    }
+
     this.updateStatus(m);
     this.view?.webview.postMessage(m);
   }

@@ -1,12 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import type { AskAnswerWire, InboundMessage } from "@dsh-vscode/contract";
+import type {
+  AskUserQuestionAnswer,
+  AskUserQuestionRequest,
+} from "@deepseek-ai/dsh-user-questions";
 import { dispatchCommand } from "../src/commands.js";
-import type { CommandHooks } from "../src/commands.js";
 
 // The command dispatcher maps inbound extension messages onto a small set of
 // front-controller hooks: the retained runner's submit/cancel and the
 // user-questions provider's resolve. `ctx` is passed through for the exit
-// seam but is deliberately inert for the pure-mapping cases below.
+// seam but is deliberately inert for the pure-mapping cases below. The hooks are
+// mocks; their inferred `Mock` types are structurally assignable to `CommandHooks`.
 function hooks() {
   return {
     runner: {
@@ -14,9 +18,10 @@ function hooks() {
       cancel: vi.fn<() => void>(),
     },
     provider: {
-      resolve: vi.fn<(askId: string, answered: unknown) => void>(),
+      ask: vi.fn<(request: AskUserQuestionRequest) => Promise<AskUserQuestionAnswer>>(),
+      resolve: vi.fn<(askId: string, answered: AskUserQuestionAnswer) => void>(),
     },
-  } as unknown as CommandHooks;
+  };
 }
 
 const inertCtx = { get: vi.fn<() => undefined>(() => undefined) } as never;
@@ -60,8 +65,8 @@ describe("dispatchCommand", () => {
     dispatchCommand(inertCtx, msg, h);
 
     // The provider must receive the mapped answer WITHOUT a stray `custom: undefined` key.
-    const resolved = h.provider.resolve.mock.calls[0]?.[1];
+    const resolved = h.provider.resolve.mock.calls[0]![1];
     expect(resolved).toEqual({ answers: [{ id: "q1", selected: ["yes"] }] });
-    expect("custom" in (resolved as { answers: unknown[] }).answers[0]).toBe(false);
+    expect("custom" in resolved.answers[0]).toBe(false);
   });
 });

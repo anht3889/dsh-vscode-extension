@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { startMockLlmServer } from "@deepseek-ai/dsh-llm-mock-server";
 import type { MockLlmServer } from "@deepseek-ai/dsh-llm-mock-server";
-import type { OutboundMessage } from "@dsh-vscode/contract";
+import type { EventMessage, OutboundMessage } from "@dsh-vscode/contract";
+import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "../src/io.js";
 import { bootTree } from "./boot.js";
 import { createRunner } from "../src/runner.js";
@@ -19,9 +20,9 @@ function capture(messages: OutboundMessage[]): Io {
   };
 }
 
-function turnEnds(messages: OutboundMessage[]): OutboundMessage[] {
+function turnEnds(messages: OutboundMessage[]): EventMessage[] {
   return messages.filter(
-    (m) => m.kind === "event" && m.event.type === "turn/end",
+    (m): m is EventMessage => m.kind === "event" && m.event.type === "turn/end",
   );
 }
 
@@ -39,6 +40,27 @@ describe("createRunner (retained)", () => {
     await mock.close();
     delete process.env.DEEPSEEK_API_KEY;
   });
+
+  it("emits a hello handshake as the FIRST outbound message", async () => {
+    const messages: OutboundMessage[] = [];
+    const io = capture(messages);
+    const ctx = await bootTree({
+      baseURL: mock.baseURL,
+      provider: "deepseek-official",
+      model: "mock-model",
+    });
+
+    await createRunner(ctx, io);
+
+    expect(messages.length).toBeGreaterThan(0);
+    const first = messages[0];
+    expect(first.kind).toBe("hello");
+    if (first.kind === "hello") {
+      expect(first.version).toBe(PROTOCOL_VERSION);
+      expect(first.dshVersion).toBe("0.1.0");
+      expect(first.cwd).toBe(process.cwd());
+    }
+  }, 60_000);
 
   it("submits twice through one agent, producing two distinct turn/end events", async () => {
     const messages: OutboundMessage[] = [];
