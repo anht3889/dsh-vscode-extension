@@ -1,0 +1,8 @@
+{
+  "name": "dsh-vscode-extension",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  }
+}

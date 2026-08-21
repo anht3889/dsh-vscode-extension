@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-test/
+out/
+lib/
+*.vsix
+
+# pnpm / npm store + caches
+.pnpm-store/
+.npm-cache/
+*.tsbuildinfo
+
+# Task 0 spike install byproducts (Task 1 owns the real root workspace + lockfile)
+packages/bridge/pnpm-lock.yaml
+packages/bridge/pnpm-workspace.yaml
