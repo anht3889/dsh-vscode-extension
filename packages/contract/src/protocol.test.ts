@@ -8,6 +8,12 @@ describe("isOutboundMessage", () => {
   it("rejects an inbound message", () => {
     expect(isOutboundMessage({ kind: "submit", text: "hi" })).toBe(false);
   });
+  it("returns false (does not throw) for null/undefined/primitives", () => {
+    expect(isOutboundMessage(null)).toBe(false);
+    expect(isOutboundMessage(undefined)).toBe(false);
+    expect(isOutboundMessage("hello")).toBe(false);
+    expect(isOutboundMessage(42)).toBe(false);
+  });
 });
 
 describe("isInboundMessage", () => {
@@ -16,5 +22,10 @@ describe("isInboundMessage", () => {
   });
   it("rejects garbage", () => {
     expect(isInboundMessage({ kind: "nope" })).toBe(false);
+  });
+  it("returns false (does not throw) for null/undefined/primitives", () => {
+    expect(isInboundMessage(null)).toBe(false);
+    expect(isInboundMessage(undefined)).toBe(false);
+    expect(isInboundMessage("submit")).toBe(false);
   });
 });

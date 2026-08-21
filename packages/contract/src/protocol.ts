@@ -22,11 +22,19 @@ export type InboundMessage = SubmitCommand | AnswerCommand | CancelCommand | Exi
 export interface AskQuestionWire { id: string; question: string; detail?: string; header?: string; options?: { label: string; description?: string }[]; multiSelect?: boolean }
 export interface AskAnswerWire { answers: { id: string; selected: string[]; custom?: string }[] }
 
+function kindOf(m: unknown): string | undefined {
+  if (typeof m !== "object" || m === null) return undefined;
+  return (m as { kind?: unknown }).kind as string | undefined;
+}
+
+const OUTBOUND_KINDS = ["hello", "session", "event", "ask", "status"] as const;
+const INBOUND_KINDS = ["submit", "answer", "cancel", "resume", "exit"] as const;
+
 export function isOutboundMessage(m: unknown): m is OutboundMessage {
-  return typeof m === "object" && m !== null &&
-    (m as any).kind === "hello" || (m as any).kind === "session" || (m as any).kind === "event" || (m as any).kind === "ask" || (m as any).kind === "status";
+  const k = kindOf(m);
+  return k !== undefined && (OUTBOUND_KINDS as readonly string[]).includes(k);
 }
 export function isInboundMessage(m: unknown): m is InboundMessage {
-  return typeof m === "object" && m !== null &&
-    ["submit","answer","cancel","resume","exit"].includes((m as any).kind);
+  const k = kindOf(m);
+  return k !== undefined && (INBOUND_KINDS as readonly string[]).includes(k);
 }
