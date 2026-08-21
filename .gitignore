@@ -5,6 +5,7 @@ node_modules/
 dist/
 out/
 lib/
+*.vsix
 
 # pnpm / npm store + caches
 .pnpm-store/
