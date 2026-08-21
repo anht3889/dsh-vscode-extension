@@ -75,4 +75,23 @@ describe("createUserQuestionProvider", () => {
     await expect(first).resolves.toEqual(a1);
     await expect(second).resolves.toEqual(a2);
   });
+
+  it("no-ops (no throw, nothing settles) when resolving an unknown askId", async () => {
+    const { io, sent } = makeIo();
+    const provider = createUserQuestionProvider(io);
+
+    const pendingPromise = provider.ask({ questions: [{ id: "a", question: "A?" }] });
+
+    // Resolving an id that was never asked must neither throw nor settle the real pending ask.
+    expect(() => provider.resolve("nonexistent-id", { answers: [] })).not.toThrow();
+
+    // The real ask is still pending: assert it has not yet settled instead of awaiting it.
+    let settled = false;
+    pendingPromise.then(() => { settled = true; });
+    await new Promise((r) => setImmediate(r));
+    expect(settled).toBe(false);
+
+    // Clean up: settle the real ask so the promise does not leak an open handle.
+    provider.resolve((sent[0] as { askId: string }).askId, { answers: [] });
+  });
 });

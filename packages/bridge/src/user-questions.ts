@@ -17,6 +17,7 @@ export interface ResolvableUserQuestionProvider extends UserQuestionProvider {
 interface Pending { resolve(answered: AskUserQuestionAnswer): void; }
 
 function mapQuestions(questions: AskUserQuestionItem[]): AskQuestionWire[] {
+  // `intent` is deliberately not propagated: AskQuestionWire has no representation for it, and it affects presentation only (never the answer protocol).
   return questions.map((q) => ({
     id: q.id,
     question: q.question,
