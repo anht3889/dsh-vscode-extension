@@ -42,7 +42,10 @@ export function App(): JSX.Element {
   }, []);
 
   const answer = useCallback(
-    (askId: string, answered: AskAnswerWire): void => post({ kind: "answer", askId, answered }),
+    (askId: string, answered: AskAnswerWire): void => {
+      dispatch({ kind: "askSettled", askId });
+      post({ kind: "answer", askId, answered });
+    },
     [post],
   );
   const apply = useCallback((): void => post({ kind: "apply" }), [post]);

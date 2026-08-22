@@ -62,8 +62,17 @@ export interface HostDisconnectedMessage {
   detail: string;
 }
 
+/** Webview-local acknowledgement that an ask answer was sent to the host. */
+export interface AskSettledMessage {
+  kind: "askSettled";
+  askId: string;
+}
+
 /** Messages accepted by the webview reducer. */
-export type UiMessage = OutboundMessage | HostDisconnectedMessage;
+export type UiMessage =
+  | OutboundMessage
+  | HostDisconnectedMessage
+  | AskSettledMessage;
 
 /**
  * Extract assistant text from an event's verbatim `data` record, tolerant of the
@@ -144,6 +153,10 @@ export function contextPercent(
  */
 export function reduce(state: UiState, msg: UiMessage): UiState {
   switch (msg.kind) {
+    case "askSettled":
+      if (state.approval?.askId !== msg.askId) return state;
+      return { ...state, approval: undefined, status: "thinking" };
+
     case "hostDisconnected":
       return {
         ...state,
@@ -234,17 +247,27 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         };
       }
       if (msg.state === "idle") {
-        return { ...state, error: undefined, status: "idle" };
+        return {
+          ...state,
+          approval: undefined,
+          error: undefined,
+          status: "idle",
+        };
       }
       return { ...state, status: msg.state };
 
     case "event": {
       const type = msg.event.type;
       if (type === "turn/start") {
-        return { ...state, diffs: [], status: "thinking" };
+        return {
+          ...state,
+          approval: undefined,
+          diffs: [],
+          status: "thinking",
+        };
       }
       if (type === "turn/end") {
-        return { ...state, status: "idle" };
+        return { ...state, approval: undefined, status: "idle" };
       }
       if (type === "assistant/chunk" || type === "assistant/message") {
         const text = assistantText(msg.event.data);

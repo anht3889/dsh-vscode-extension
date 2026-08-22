@@ -85,6 +85,23 @@ describe("reduce", () => {
     expect(s.approval).toEqual({ askId: "ask-1", questions: [QUESTION] });
   });
 
+  it("clears a matching approval after its answer is sent", () => {
+    const pending = reduce(initialState, askMsg("ask-1"));
+    const settled = reduce(pending, {
+      kind: "askSettled",
+      askId: "ask-1",
+    });
+    expect(settled.approval).toBeUndefined();
+    expect(settled.status).toBe("thinking");
+  });
+
+  it("clears an aborted approval when the turn ends", () => {
+    const pending = reduce(initialState, askMsg("ask-1"));
+    const ended = reduce(pending, eventMsg("turn/end", {}));
+    expect(ended.approval).toBeUndefined();
+    expect(ended.status).toBe("idle");
+  });
+
   it("records tool/result diffs into diffs", () => {
     const s = reduce(
       initialState,

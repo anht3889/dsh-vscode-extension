@@ -20,6 +20,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private readonly decorations: DecorationManager;
   private view: vscode.WebviewView | undefined;
   private running: Running | undefined;
+  private startingChild = false;
   private status: DshState = "idle";
   private hello: HelloMessage | undefined;
   private pending: ToolDiff[] = [];
@@ -84,6 +85,8 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
           kind: "resume",
           sessionId: this.currentSessionId,
         });
+      } else if (!this.running) {
+        void this.startActiveFolder();
       }
       return;
     }
@@ -157,8 +160,9 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
-    if (this.running) return;
+    if (this.running || this.startingChild) return;
 
+    this.startingChild = true;
     this.view?.webview.postMessage({
       kind: "status",
       state: "thinking",
@@ -191,6 +195,8 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       const detail = err instanceof Error ? err.message : String(err);
       this.view?.webview.postMessage({ kind: "status", state: "error", detail });
       return;
+    } finally {
+      this.startingChild = false;
     }
   }
 

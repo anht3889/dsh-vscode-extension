@@ -559,10 +559,13 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
           const titles = await query.readTitleSnapshots(
             records.map((record) => record.header.id),
           );
+          const titlesBySession = new Map(
+            titles.map((result) => [result.sessionId, result]),
+          );
           sendItems(
-            records.map((record, index) => {
+            records.map((record) => {
               if (record.header.id === current.id) return liveItem;
-              const titleResult = titles[index];
+              const titleResult = titlesBySession.get(record.header.id);
               const title =
                 titleResult?.status === "fulfilled"
                   ? titleResult.value.title
