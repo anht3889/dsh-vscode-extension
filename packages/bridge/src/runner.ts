@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
+import type { ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
 import {
   installModelSelection,
   type AgentHandle,
   type ModelSelectionRef,
 } from "@deepseek-ai/dsh-agent";
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { createUserMessage, type ContentBlock } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type {
   Session,
@@ -17,6 +18,7 @@ import type {} from "@deepseek-ai/dsh-session-query";
 import type {
   CatalogPayload,
   ContextPayload,
+  EncodedImageAttachment,
   ModelListItem,
   ModelRef,
   OutboundMessage,
@@ -27,6 +29,7 @@ import type {
 import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
 import { createFileReferenceSearch } from "./file-references.js";
+import { admitImages } from "./image-admission.js";
 
 const PRESET_LABELS: Record<string, string> = {
   "read-only": "Read Only",
@@ -238,6 +241,7 @@ export interface SubmitOptions {
   provider?: string;
   model?: string;
   permission?: string;
+  images?: readonly EncodedImageAttachment[];
 }
 
 /**
@@ -330,12 +334,16 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     handle: initialHandle,
     selectionRef: initialSelectionRef,
   };
+  let activeAdmission: AbortController | undefined;
   const fileReferenceSearch = createFileReferenceSearch(
     ctx,
     () => live.handle.agent,
     (message) => io.send(message),
   );
   io.onDisconnect(fileReferenceSearch.dispose);
+  io.onDisconnect(() => {
+    activeAdmission?.abort(new Error("image admission cancelled"));
+  });
 
   const emitLiveSession = async (
     current: LiveSession,
@@ -379,6 +387,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   const replaceLive = async (
     create: (selectionRef: LiveSelectionRef) => Promise<AgentHandle>,
   ): Promise<void> => {
+    activeAdmission?.abort(new Error("image admission cancelled"));
     fileReferenceSearch.dispose();
     const previous = live;
     const nextSelectionRef: LiveSelectionRef = {
@@ -413,11 +422,12 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   let tail: Promise<void> = live.handle.agent.whenIdle();
 
-  const sendError = (error: unknown): void => {
+  const sendError = (error: unknown, code?: string): void => {
     io.send({
       kind: "status",
       state: "error",
       detail: error instanceof Error ? error.message : String(error),
+      ...(code !== undefined ? { code } : {}),
     });
   };
 
@@ -518,9 +528,44 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
         }
       }
       const current = live;
+      const admission = new AbortController();
+      activeAdmission = admission;
+      let refs: readonly ImageAttachmentRef[] = [];
+      try {
+        refs = opts.images?.length
+          ? await admitImages(
+              ctx,
+              current.handle.agent,
+              opts.images,
+              admission.signal,
+            )
+          : [];
+      } catch (error) {
+        sendError(error, "submit-rejected");
+        return;
+      } finally {
+        if (activeAdmission === admission) activeAdmission = undefined;
+      }
+      const content: ContentBlock[] = [];
+      if (text.trim() !== "") {
+        content.push({ type: "text", text: text.trim() });
+      }
+      content.push(
+        ...refs.map((attachment) => ({
+          type: "image" as const,
+          attachment,
+        })),
+      );
+      if (content.length === 0) {
+        sendError(
+          new Error("message has no text or images"),
+          "submit-rejected",
+        );
+        return;
+      }
       current.handle.agent.followup(
         createUserMessage({
-          content: [{ type: "text", text }],
+          content,
           source: { kind: "user" },
         }),
       );
@@ -532,6 +577,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const cancel = (): void => {
+    activeAdmission?.abort(new Error("image admission cancelled"));
     live.handle.agent.cancel({ kind: "user" });
   };
 

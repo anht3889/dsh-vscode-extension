@@ -51,6 +51,7 @@ export function dispatchCommand(
         ...(msg.provider !== undefined ? { provider: msg.provider } : {}),
         ...(msg.model !== undefined ? { model: msg.model } : {}),
         ...(msg.permission !== undefined ? { permission: msg.permission } : {}),
+        ...(msg.images !== undefined ? { images: msg.images } : {}),
       });
       return;
     case "cancel":

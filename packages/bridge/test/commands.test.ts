@@ -116,6 +116,7 @@ describe("dispatchCommand", () => {
         provider: "p",
         model: "m",
         permission: "read-only",
+        images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
       },
       h,
     );
@@ -123,6 +124,7 @@ describe("dispatchCommand", () => {
       provider: "p",
       model: "m",
       permission: "read-only",
+      images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
     });
   });
 });

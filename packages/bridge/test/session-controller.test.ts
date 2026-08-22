@@ -10,11 +10,20 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
+import {
+  AttachmentId,
+  type AttachmentStore,
+  type ImageAttachmentRef,
+  type SaveImageAttachment,
+} from "@deepseek-ai/dsh-attachment";
+import type { LlmResolvedModelInfo } from "@deepseek-ai/dsh-llm";
 import {
   startMockLlmServer,
   type MockLlmServer,
 } from "@deepseek-ai/dsh-llm-mock-server";
+import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
 import type { OutboundMessage } from "@dsh-vscode/contract";
 import type { Io } from "../src/io.js";
 import { createRunner } from "../src/runner.js";
@@ -23,6 +32,24 @@ import { bootTree, type BootOptions } from "./boot.js";
 let mock: MockLlmServer;
 let persistenceRoot: string;
 let contexts: Context[];
+
+const IMAGE_REF: ImageAttachmentRef = {
+  attachmentId: AttachmentId(`sha256:${"1".repeat(64)}`),
+  mediaType: "image/png",
+  bytes: 1,
+  width: 1,
+  height: 1,
+  name: "a.png",
+};
+
+const IMAGE_LIMITS = {
+  maxImageBytes: 10,
+  maxImagesPerMessage: 2,
+  maxMessageImageBytes: 20,
+  maxImagePixels: 100,
+  maxImageDimension: 10,
+  mediaTypes: ["image/png"] as const,
+};
 
 function capture(messages: OutboundMessage[]): Io {
   return {
@@ -49,6 +76,38 @@ async function boot(overrides: Partial<BootOptions> = {}): Promise<Context> {
   const ctx = await bootTree(options(overrides));
   contexts.push(ctx);
   return ctx;
+}
+
+async function imageBoot(
+  saveImages: (
+    inputs: readonly SaveImageAttachment[],
+  ) => Promise<readonly ImageAttachmentRef[]>,
+  modelInfo: Partial<LlmResolvedModelInfo> = {
+    inputModalities: ["text", "image"],
+  },
+): Promise<Context> {
+  const ctx = await boot();
+  ctx.provide("attachments", {
+    imageLimits: IMAGE_LIMITS,
+    saveImages,
+  } as unknown as AttachmentStore);
+  const llm = ctx.get("llm");
+  if (llm === undefined) throw new Error("llm was not mounted");
+  const resolveModelInfo = llm.resolveModelInfo.bind(llm);
+  llm.resolveModelInfo = async (...args) => ({
+    ...(await resolveModelInfo(...args)),
+    ...modelInfo,
+  });
+  return ctx;
+}
+
+function userMessages(
+  session: Session,
+): Extract<SessionEvent, { type: "user/message" }>[] {
+  return session.events.filter(
+    (event): event is Extract<SessionEvent, { type: "user/message" }> =>
+      event.type === "user/message",
+  );
 }
 
 describe("session controller", () => {
@@ -548,6 +607,65 @@ describe("session controller", () => {
       ),
     ).toBe(true);
   }, 120_000);
+
+  it("creates one mixed user message from text and admitted images", async () => {
+    const messages: OutboundMessage[] = [];
+    const saveImages = vi.fn(async () => [IMAGE_REF]);
+    const ctx = await imageBoot(saveImages);
+    const runner = await createRunner(ctx, capture(messages));
+    const session = ctx.get("agents")?.roots()[0]?.session;
+    if (session === undefined) throw new Error("live session was not mounted");
+
+    runner.submit("look", {
+      images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
+    });
+
+    await waitFor(() => userMessages(session).length === 1);
+    expect(userMessages(session)[0]?.data.content).toEqual([
+      { type: "text", text: "look" },
+      { type: "image", attachment: IMAGE_REF },
+    ]);
+  });
+
+  it("creates an image-only user message without an empty text block", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await imageBoot(async () => [IMAGE_REF]);
+    const runner = await createRunner(ctx, capture(messages));
+    const session = ctx.get("agents")?.roots()[0]?.session;
+    if (session === undefined) throw new Error("live session was not mounted");
+
+    runner.submit(" \n ", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+
+    await waitFor(() => userMessages(session).length === 1);
+    expect(userMessages(session)[0]?.data.content).toEqual([
+      { type: "image", attachment: IMAGE_REF },
+    ]);
+  });
+
+  it("rejects the submit when image admission fails", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await imageBoot(async () => {
+      throw new Error("image exceeds configured limit");
+    });
+    const runner = await createRunner(ctx, capture(messages));
+    const agent = ctx.get("agents")?.roots()[0];
+    if (agent === undefined) throw new Error("live agent was not mounted");
+    const followup = vi.spyOn(agent, "followup");
+
+    runner.submit("keep me", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+
+    await waitFor(() =>
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "submit-rejected",
+      ),
+    );
+    expect(followup).not.toHaveBeenCalled();
+  });
 
   it("emits next-request context after a completed turn", async () => {
     const messages: OutboundMessage[] = [];
