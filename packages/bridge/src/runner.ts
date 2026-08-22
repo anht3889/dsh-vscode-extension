@@ -1,9 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
-import { installModelSelection, type ModelSelectionRef } from "@deepseek-ai/dsh-agent";
+import {
+  installModelSelection,
+  type AgentHandle,
+  type ModelSelectionRef,
+} from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
+import type {
+  Session,
+  SessionEvent,
+  SessionHeader,
+} from "@deepseek-ai/dsh-session";
 import type {
   CatalogPayload,
   ContextPayload,
@@ -12,6 +20,7 @@ import type {
   OutboundMessage,
   PermissionsPayload,
   SessionEventWire,
+  SessionListItem,
 } from "@dsh-vscode/contract";
 import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
@@ -88,6 +97,55 @@ function buildContext(
 /** Relay a non-fatal `status:error` for session commands not yet implemented. */
 function unavailable(feature: string, io: Io): void {
   io.send({ kind: "status", state: "error", detail: `${feature} is not available yet` });
+}
+
+function firstUserText(event: SessionEvent): string | undefined {
+  if (event.type !== "user/message") return undefined;
+  const content = event.data.content;
+  for (const part of content) {
+    if (part.type === "text" && part.text.trim() !== "") {
+      return part.text.trim().slice(0, 80);
+    }
+  }
+  return undefined;
+}
+
+function sessionTitle(sessionId: string, events: readonly SessionEvent[]): string {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    const genericEvent = event as
+      | { type: string; data: { title?: unknown } }
+      | undefined;
+    if (genericEvent?.type === "session/title") {
+      const title = genericEvent.data.title;
+      if (typeof title === "string") return title;
+    }
+  }
+  for (const event of events) {
+    const text = firstUserText(event);
+    if (text !== undefined) return text;
+  }
+  return sessionId;
+}
+
+function sessionListItem(
+  sessionId: string,
+  createdAt: number,
+  cwd: string,
+  events: readonly SessionEvent[],
+): SessionListItem {
+  const lastUserTime = events.reduce(
+    (latest, event) =>
+      event.type === "user/message" ? Math.max(latest, event.time) : latest,
+    createdAt,
+  );
+  return {
+    sessionId,
+    title: sessionTitle(sessionId, events),
+    createdAt,
+    updatedAt: lastUserTime,
+    cwd,
+  };
 }
 
 /**
@@ -216,7 +274,16 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   }
 
   const selection = defaultModel.currentSelection();
-  const selectionRef: ModelSelectionRef = {
+  type LiveSelectionRef = ModelSelectionRef & { current: ModelRef };
+  interface SessionPersistenceReader {
+    list(): Promise<readonly SessionHeader[]>;
+    inspect(id: SessionId): Promise<{
+      readonly meta: SessionHeader;
+      readonly events: readonly SessionEvent[];
+    }>;
+  }
+
+  const initialSelectionRef: LiveSelectionRef = {
     current: selection,
     assembled: undefined,
   };
@@ -245,7 +312,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     io.send(out);
   });
 
-  const { agent } = await agents.create({
+  const initialHandle = await agents.create({
     sessionId: SessionId(`session-${randomUUID()}`),
     meta: { cwd: process.cwd() },
     agentOptions: {
@@ -253,73 +320,241 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       model: selection.model,
     },
     setup: (agentCtx) => {
-      installModelSelection(agentCtx, selectionRef);
+      installModelSelection(agentCtx, initialSelectionRef);
     },
   });
 
-  const catalog = await buildCatalog(ctx, {
-    provider: selection.provider,
-    model: selection.model,
-  });
-  const permissions = buildPermissions(ctx, agent.session);
-  const window = catalog.models.find(
-    (m) => m.provider === catalog.current.provider && m.model === catalog.current.model,
-  )?.contextWindow;
-  const context = buildContext(ctx, agent.session, window);
-  io.send({
-    kind: "session",
-    sessionId: agent.session.id,
-    cwd: process.cwd(),
-    createdAt: Date.now(),
-  });
-  io.send({
-    kind: "ready",
-    sessionId: agent.session.id,
-    cwd: process.cwd(),
-    models: catalog,
-    permissions,
-    ...(context !== undefined ? { context } : {}),
-  });
+  interface LiveSession {
+    handle: AgentHandle;
+    selectionRef: LiveSelectionRef;
+  }
 
-  // Serialize turn tails: each submit appends to this chain so the prior turn's
-  // flush + idle relay settles before the next followup is issued. The seed
-  // resolves the agent's initial idle state.
-  let tail: Promise<void> = agent.whenIdle();
+  let live: LiveSession = {
+    handle: initialHandle,
+    selectionRef: initialSelectionRef,
+  };
+
+  const emitLiveSession = async (
+    current: LiveSession,
+    includeHistory: boolean,
+  ): Promise<void> => {
+    const { session } = current.handle.agent;
+    const catalog = await buildCatalog(ctx, current.selectionRef.current);
+    const permissions = buildPermissions(ctx, session);
+    const window = catalog.models.find(
+      (model) =>
+        model.provider === catalog.current.provider &&
+        model.model === catalog.current.model,
+    )?.contextWindow;
+    const context = buildContext(ctx, session, window);
+    io.send({
+      kind: "session",
+      sessionId: session.id,
+      cwd: session.header.cwd ?? process.cwd(),
+      createdAt: session.header.createdAt,
+    });
+    if (includeHistory) {
+      io.send({
+        kind: "history",
+        sessionId: session.id,
+        events: session.events.map(toWire),
+      });
+    }
+    io.send({
+      kind: "ready",
+      sessionId: session.id,
+      cwd: session.header.cwd ?? process.cwd(),
+      models: catalog,
+      permissions,
+      ...(context !== undefined ? { context } : {}),
+    });
+  };
+
+  await emitLiveSession(live, false);
+
+  const replaceLive = async (
+    create: (selectionRef: LiveSelectionRef) => Promise<AgentHandle>,
+  ): Promise<void> => {
+    const previous = live;
+    const nextSelectionRef: LiveSelectionRef = {
+      current: { ...previous.selectionRef.current },
+      assembled: undefined,
+    };
+    const next: LiveSession = {
+      handle: await create(nextSelectionRef),
+      selectionRef: nextSelectionRef,
+    };
+    try {
+      previous.handle.agent.cancel({ kind: "user" });
+      await sessions.flush(previous.handle.agent.session);
+      await previous.handle.dispose();
+    } catch (error) {
+      await sessions.flush(next.handle.agent.session);
+      await next.handle.dispose();
+      throw error;
+    }
+    live = next;
+    await next.handle.agent.whenIdle();
+    await emitLiveSession(next, true);
+  };
+
+  let tail: Promise<void> = live.handle.agent.whenIdle();
+
+  const queue = (operation: () => Promise<void>): void => {
+    tail = tail.then(operation).catch((error: unknown) => {
+      io.send({ kind: "status", state: "error", detail: String(error) });
+    });
+  };
 
   const submit = (text: string, _opts?: SubmitOptions): void => {
-    const turn: Promise<void> = tail
-      .then(() => {
-        agent.followup(
+    queue(async () => {
+      const current = live;
+      current.handle.agent.followup(
           createUserMessage({
             content: [{ type: "text", text }],
             source: { kind: "user" },
           }),
-        );
-      })
-      .then(() => agent.whenIdle())
-      .then(() => sessions.flush(agent.session))
-      .then(() => {
-        io.send({ kind: "status", state: "idle" });
-      });
-    tail = turn;
-    // A rejected turn must not poison the tail: surface the failure as a
-    // status:error, then reset the chain so later submits keep working.
-    turn.catch((error: unknown) => {
-      io.send({ kind: "status", state: "error", detail: String(error) });
-      tail = Promise.resolve();
+      );
+      await current.handle.agent.whenIdle();
+      await sessions.flush(current.handle.agent.session);
+      io.send({ kind: "status", state: "idle" });
     });
   };
 
   const cancel = (): void => {
-    agent.cancel({ kind: "user" });
+    live.handle.agent.cancel({ kind: "user" });
+  };
+
+  const listSessions = (): void => {
+    void (async () => {
+      const persistence = ctx.get(
+        "sessionPersistence",
+      ) as SessionPersistenceReader | undefined;
+      const current = live.handle.agent.session;
+      if (persistence === undefined) {
+        io.send({
+          kind: "sessions",
+          available: false,
+          items: [
+            sessionListItem(
+              current.id,
+              current.header.createdAt,
+              current.header.cwd ?? process.cwd(),
+              current.events,
+            ),
+          ],
+        });
+        return;
+      }
+
+      const headers = (await persistence.list()).filter(
+        (header) => header.cwd === process.cwd(),
+      );
+      const items = await Promise.all(
+        headers.map(async (header): Promise<SessionListItem> => {
+          if (header.id === current.id) {
+            return sessionListItem(
+              current.id,
+              current.header.createdAt,
+              current.header.cwd ?? process.cwd(),
+              current.events,
+            );
+          }
+          try {
+            const inspection = await persistence.inspect(header.id);
+            return sessionListItem(
+              header.id,
+              header.createdAt,
+              header.cwd ?? process.cwd(),
+              inspection.events,
+            );
+          } catch {
+            return {
+              sessionId: header.id,
+              title: header.id,
+              createdAt: header.createdAt,
+              updatedAt: header.createdAt,
+              cwd: header.cwd ?? process.cwd(),
+            };
+          }
+        }),
+      );
+      if (!items.some((item) => item.sessionId === current.id)) {
+        items.push(
+          sessionListItem(
+            current.id,
+            current.header.createdAt,
+            current.header.cwd ?? process.cwd(),
+            current.events,
+          ),
+        );
+      }
+      items.sort((left, right) => right.updatedAt - left.updatedAt);
+      io.send({ kind: "sessions", available: true, items });
+    })().catch((error: unknown) => {
+      io.send({ kind: "status", state: "error", detail: String(error) });
+    });
+  };
+
+  const newSession = (): void => {
+    queue(async () => {
+      await replaceLive((selectionRef) =>
+        agents.create({
+          sessionId: SessionId(`session-${randomUUID()}`),
+          meta: { cwd: process.cwd() },
+          agentOptions: {
+            provider: selectionRef.current.provider,
+            model: selectionRef.current.model,
+          },
+          setup: (agentCtx) => {
+            installModelSelection(agentCtx, selectionRef);
+          },
+        }),
+      );
+    });
+  };
+
+  const resume = (sessionId: string): void => {
+    queue(async () => {
+      const persistence = ctx.get(
+        "sessionPersistence",
+      ) as SessionPersistenceReader | undefined;
+      if (persistence === undefined) {
+        throw new Error(`cannot resume ${sessionId} (durable history unavailable)`);
+      }
+      const inspection = await persistence.inspect(SessionId(sessionId));
+      if (
+        inspection.meta.cwd !== undefined &&
+        inspection.meta.cwd !== process.cwd()
+      ) {
+        io.send({
+          kind: "status",
+          state: "error",
+          detail: `cannot resume ${sessionId} (cwd mismatch)`,
+        });
+        return;
+      }
+      await replaceLive((selectionRef) =>
+        agents.resume({
+          resumeSessionId: SessionId(sessionId),
+          agentOptions: {
+            provider: selectionRef.current.provider,
+            model: selectionRef.current.model,
+          },
+          setup: (agentCtx) => {
+            installModelSelection(agentCtx, selectionRef);
+          },
+        }),
+      );
+    });
   };
 
   return {
     submit,
     cancel,
-    listSessions: () => unavailable("listSessions", io),
-    newSession: () => unavailable("newSession", io),
-    resume: (_sessionId: string) => unavailable("resume", io),
+    listSessions,
+    newSession,
+    resume,
     selectModel: (_provider: string, _model: string) => unavailable("selectModel", io),
     selectPermission: (_preset: string) => unavailable("selectPermission", io),
   };

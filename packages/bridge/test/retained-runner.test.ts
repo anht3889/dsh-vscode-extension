@@ -41,7 +41,7 @@ describe("createRunner (retained)", () => {
     delete process.env.DEEPSEEK_API_KEY;
   });
 
-  it("emits a hello handshake as the FIRST outbound message", async () => {
+  it("emits hello, session, then ready in order", async () => {
     const messages: OutboundMessage[] = [];
     const io = capture(messages);
     const ctx = await bootTree({
@@ -61,7 +61,18 @@ describe("createRunner (retained)", () => {
       expect(first.cwd).toBe(process.cwd());
     }
 
-    const ready = messages.find((m) => m.kind === "ready");
+    const lifecycle = messages.filter(
+      (message) =>
+        message.kind === "hello" ||
+        message.kind === "session" ||
+        message.kind === "ready",
+    );
+    expect(lifecycle.map((message) => message.kind)).toEqual([
+      "hello",
+      "session",
+      "ready",
+    ]);
+    const ready = lifecycle.at(-1);
     expect(ready).toBeDefined();
     if (ready?.kind === "ready") {
       expect(ready.sessionId).toEqual(expect.any(String));
