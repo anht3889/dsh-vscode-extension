@@ -64,7 +64,7 @@ export async function bootTree(opts: BootOptions): Promise<Context> {
     {
       baseURL: opts.baseURL,
       apiKeyEnv: "DEEPSEEK_API_KEY",
-      models: [{ id: opts.model }],
+      models: [{ id: opts.model, contextWindow: 128_000 }],
     },
   );
 

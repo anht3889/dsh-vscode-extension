@@ -95,11 +95,6 @@ function buildContext(
   return { used, window };
 }
 
-/** Relay a non-fatal `status:error` for session commands not yet implemented. */
-function unavailable(feature: string, io: Io): void {
-  io.send({ kind: "status", state: "error", detail: `${feature} is not available yet` });
-}
-
 function firstUserText(event: SessionEvent): string | undefined {
   if (event.type !== "user/message") return undefined;
   const content = event.data.content;
@@ -406,23 +401,89 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   let tail: Promise<void> = live.handle.agent.whenIdle();
 
-  const queue = (operation: () => Promise<void>): void => {
-    tail = tail.then(operation).catch((error: unknown) => {
-      io.send({ kind: "status", state: "error", detail: String(error) });
+  const sendError = (error: unknown): void => {
+    io.send({
+      kind: "status",
+      state: "error",
+      detail: error instanceof Error ? error.message : String(error),
     });
   };
 
-  const submit = (text: string, _opts?: SubmitOptions): void => {
+  const queue = (operation: () => Promise<void>): void => {
+    tail = tail.then(operation).catch((error: unknown) => {
+      sendError(error);
+    });
+  };
+
+  const emitContext = async (): Promise<void> => {
+    const catalog = await buildCatalog(ctx, live.selectionRef.current);
+    const window = catalog.models.find(
+      (model) =>
+        model.provider === catalog.current.provider &&
+        model.model === catalog.current.model,
+    )?.contextWindow;
+    const context = buildContext(ctx, live.handle.agent.session, window);
+    if (context !== undefined) {
+      io.send({ kind: "context", ...context });
+    }
+  };
+
+  const applyModel = async (provider: string, model: string): Promise<void> => {
+    const llm = ctx.get("llm");
+    if (llm === undefined) throw new Error("llm is not mounted");
+    const resolved = await llm.resolveCallConfig({ provider, model });
+    const selected: ModelRef = {
+      provider: resolved.provider,
+      model: resolved.model,
+    };
+    const catalog = await buildCatalog(ctx, selected);
+    live.selectionRef.current = selected;
+    io.send({ kind: "catalog", ...catalog });
+    await emitContext();
+  };
+
+  const applyPermission = (preset: string): void => {
+    const permissionPresets = ctx.get("permissionPresets");
+    if (permissionPresets === undefined) {
+      throw new Error("permission presets are not mounted");
+    }
+    permissionPresets.set(live.handle.agent.session, preset);
+    io.send({
+      kind: "permissions",
+      ...buildPermissions(ctx, live.handle.agent.session),
+    });
+  };
+
+  ctx.on("session/event", (session: Session, event: SessionEvent) => {
+    if (
+      event.type === "request/context" &&
+      session.id === live.handle.agent.session.id
+    ) {
+      void emitContext().catch(sendError);
+    }
+  });
+
+  const submit = (text: string, opts: SubmitOptions = {}): void => {
     queue(async () => {
+      if (opts.permission !== undefined) {
+        applyPermission(opts.permission);
+      }
+      if (opts.provider !== undefined || opts.model !== undefined) {
+        if (opts.provider === undefined || opts.model === undefined) {
+          throw new Error("submit model selection requires provider and model");
+        }
+        await applyModel(opts.provider, opts.model);
+      }
       const current = live;
       current.handle.agent.followup(
-          createUserMessage({
-            content: [{ type: "text", text }],
-            source: { kind: "user" },
-          }),
+        createUserMessage({
+          content: [{ type: "text", text }],
+          source: { kind: "user" },
+        }),
       );
       await current.handle.agent.whenIdle();
       await sessions.flush(current.handle.agent.session);
+      await emitContext();
       io.send({ kind: "status", state: "idle" });
     });
   };
@@ -573,14 +634,38 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     });
   };
 
+  const selectModel = (provider: string, model: string): void => {
+    queue(async () => {
+      try {
+        await applyModel(provider, model);
+      } catch (error) {
+        sendError(error);
+      }
+    });
+  };
+
+  const selectPermission = (preset: string): void => {
+    queue(async () => {
+      try {
+        applyPermission(preset);
+      } catch (error) {
+        sendError(error);
+        io.send({
+          kind: "permissions",
+          ...buildPermissions(ctx, live.handle.agent.session),
+        });
+      }
+    });
+  };
+
   return {
     submit,
     cancel,
     listSessions,
     newSession,
     resume,
-    selectModel: (_provider: string, _model: string) => unavailable("selectModel", io),
-    selectPermission: (_preset: string) => unavailable("selectPermission", io),
+    selectModel,
+    selectPermission,
   };
 }
 

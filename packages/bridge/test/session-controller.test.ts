@@ -397,6 +397,94 @@ describe("session controller", () => {
     );
   }, 120_000);
 
+  it("updates the selected model and emits a catalog snapshot", async () => {
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+
+    runner.selectModel("deepseek-official", "mock-model");
+
+    await waitFor(() => messages.some((message) => message.kind === "catalog"));
+    const catalog = messages.filter((message) => message.kind === "catalog").at(-1);
+    expect(catalog?.kind).toBe("catalog");
+    if (catalog?.kind === "catalog") {
+      expect(catalog.current).toEqual({
+        provider: "deepseek-official",
+        model: "mock-model",
+      });
+      expect(catalog.models[0]?.contextWindow).toBe(128_000);
+    }
+  });
+
+  it("keeps the selected model when an unknown model is rejected", async () => {
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+
+    runner.selectModel("missing-provider", "missing-model");
+
+    await waitFor(() =>
+      messages.some(
+        (message) => message.kind === "status" && message.state === "error",
+      ),
+    );
+    expect(messages.some((message) => message.kind === "catalog")).toBe(false);
+
+    runner.submit("still uses the configured model");
+    await waitFor(
+      () =>
+        messages.some(
+          (message) =>
+            message.kind === "event" && message.event.type === "turn/end",
+        ),
+      60_000,
+    );
+  }, 120_000);
+
+  it("reports unavailable permission presets and re-emits the current selection", async () => {
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+
+    runner.selectPermission("read-only");
+
+    await waitFor(() =>
+      messages.some(
+        (message) =>
+          message.kind === "status" &&
+          message.state === "error" &&
+          message.detail?.includes("permission presets are not mounted") === true,
+      ),
+    );
+    const permissions = messages
+      .filter((message) => message.kind === "permissions")
+      .at(-1);
+    expect(permissions?.kind === "permissions" ? permissions.current : undefined).toBe(
+      "workspace-write",
+    );
+  });
+
+  it("emits next-request context after a completed turn", async () => {
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+
+    runner.submit("measure this turn", {
+      provider: "deepseek-official",
+      model: "mock-model",
+    });
+
+    await waitFor(
+      () =>
+        messages.some(
+          (message) => message.kind === "status" && message.state === "idle",
+        ),
+      60_000,
+    );
+    const context = messages.filter((message) => message.kind === "context").at(-1);
+    expect(context?.kind).toBe("context");
+    if (context?.kind === "context") {
+      expect(context.window).toBe(128_000);
+      expect(context.used).toBeGreaterThanOrEqual(0);
+    }
+  }, 120_000);
+
   it("rejects a persisted session from another cwd without replacing the current session", async () => {
     const originalCwd = process.cwd();
     const foreignCwd = await mkdtemp(join(tmpdir(), "dsh-vscode-foreign-"));
