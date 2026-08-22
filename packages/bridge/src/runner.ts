@@ -335,15 +335,16 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     selectionRef: initialSelectionRef,
   };
   let activeAdmission: AbortController | undefined;
+  const abortActiveAdmission = (): void => {
+    activeAdmission?.abort(new Error("image admission cancelled"));
+  };
   const fileReferenceSearch = createFileReferenceSearch(
     ctx,
     () => live.handle.agent,
     (message) => io.send(message),
   );
   io.onDisconnect(fileReferenceSearch.dispose);
-  io.onDisconnect(() => {
-    activeAdmission?.abort(new Error("image admission cancelled"));
-  });
+  io.onDisconnect(abortActiveAdmission);
 
   const emitLiveSession = async (
     current: LiveSession,
@@ -387,7 +388,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   const replaceLive = async (
     create: (selectionRef: LiveSelectionRef) => Promise<AgentHandle>,
   ): Promise<void> => {
-    activeAdmission?.abort(new Error("image admission cancelled"));
+    abortActiveAdmission();
     fileReferenceSearch.dispose();
     const previous = live;
     const nextSelectionRef: LiveSelectionRef = {
@@ -577,7 +578,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const cancel = (): void => {
-    activeAdmission?.abort(new Error("image admission cancelled"));
+    abortActiveAdmission();
     live.handle.agent.cancel({ kind: "user" });
   };
 
@@ -689,6 +690,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const newSession = (): void => {
+    abortActiveAdmission();
     queue(async () => {
       await replaceLive(async (selectionRef) => {
         const handle = await agents.create({
@@ -716,6 +718,9 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const resume = (sessionId: string): void => {
+    if (sessionId !== live.handle.agent.session.id) {
+      abortActiveAdmission();
+    }
     queue(async () => {
       if (sessionId === live.handle.agent.session.id) {
         await emitLiveSession(live, true);

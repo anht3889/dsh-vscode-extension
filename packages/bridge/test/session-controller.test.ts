@@ -51,13 +51,18 @@ const IMAGE_LIMITS = {
   mediaTypes: ["image/png"] as const,
 };
 
-function capture(messages: OutboundMessage[]): Io {
+function capture(
+  messages: OutboundMessage[],
+  disconnectListeners?: Array<() => void>,
+): Io {
   return {
     send(message) {
       messages.push(message);
     },
     onCommand() {},
-    onDisconnect() {},
+    onDisconnect(listener) {
+      disconnectListeners?.push(listener);
+    },
     close() {},
   };
 }
@@ -108,6 +113,32 @@ function userMessages(
     (event): event is Extract<SessionEvent, { type: "user/message" }> =>
       event.type === "user/message",
   );
+}
+
+function deferredImageSave(): {
+  saveImages: (
+    inputs: readonly SaveImageAttachment[],
+  ) => Promise<readonly ImageAttachmentRef[]>;
+  started: Promise<void>;
+  release: () => void;
+} {
+  let markStarted: () => void = () => {};
+  let release: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    async saveImages() {
+      markStarted();
+      await blocked;
+      return [IMAGE_REF];
+    },
+    started,
+    release,
+  };
 }
 
 describe("session controller", () => {
@@ -665,6 +696,142 @@ describe("session controller", () => {
       ),
     );
     expect(followup).not.toHaveBeenCalled();
+  });
+
+  it("cancel aborts deferred admission without starting a turn", async () => {
+    const messages: OutboundMessage[] = [];
+    const deferred = deferredImageSave();
+    const ctx = await imageBoot(deferred.saveImages);
+    const runner = await createRunner(ctx, capture(messages));
+    const agent = ctx.get("agents")?.roots()[0];
+    if (agent === undefined) throw new Error("live agent was not mounted");
+    const followup = vi.spyOn(agent, "followup");
+
+    runner.submit("cancel this", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+    await deferred.started;
+    runner.cancel();
+    deferred.release();
+
+    await waitFor(() =>
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "submit-rejected",
+      ),
+    );
+    expect(followup).not.toHaveBeenCalled();
+    expect(
+      agent.session.events.some((event) => event.type === "turn/start"),
+    ).toBe(false);
+  });
+
+  it("new session aborts deferred admission before queued replacement", async () => {
+    const messages: OutboundMessage[] = [];
+    const deferred = deferredImageSave();
+    const ctx = await imageBoot(deferred.saveImages);
+    const runner = await createRunner(ctx, capture(messages));
+    const agent = ctx.get("agents")?.roots()[0];
+    if (agent === undefined) throw new Error("live agent was not mounted");
+    const followup = vi.spyOn(agent, "followup");
+
+    runner.submit("replace this session", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+    await deferred.started;
+    runner.newSession();
+    deferred.release();
+
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 2,
+    );
+    expect(
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "submit-rejected",
+      ),
+    ).toBe(true);
+    expect(followup).not.toHaveBeenCalled();
+    expect(
+      agent.session.events.some((event) => event.type === "turn/start"),
+    ).toBe(false);
+  });
+
+  it("resume aborts deferred admission before queued replacement", async () => {
+    const messages: OutboundMessage[] = [];
+    const deferred = deferredImageSave();
+    const ctx = await imageBoot(deferred.saveImages);
+    const runner = await createRunner(ctx, capture(messages));
+    const firstReady = messages.find((message) => message.kind === "ready");
+    if (firstReady?.kind !== "ready") {
+      throw new Error("runner did not become ready");
+    }
+    runner.submit("persist resume target");
+    await waitFor(() =>
+      messages.some(
+        (message) => message.kind === "status" && message.state === "idle",
+      ),
+    );
+    runner.newSession();
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 2,
+    );
+    const agent = ctx.get("agents")?.roots()[0];
+    if (agent === undefined) throw new Error("replacement agent was not mounted");
+    const followup = vi.spyOn(agent, "followup");
+
+    runner.submit("resume away from this", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+    await deferred.started;
+    runner.resume(firstReady.sessionId);
+    deferred.release();
+
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 3,
+    );
+    expect(
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "submit-rejected",
+      ),
+    ).toBe(true);
+    expect(followup).not.toHaveBeenCalled();
+    expect(
+      agent.session.events.some((event) => event.type === "turn/start"),
+    ).toBe(false);
+  });
+
+  it("disconnect aborts deferred admission without starting a turn", async () => {
+    const messages: OutboundMessage[] = [];
+    const disconnectListeners: Array<() => void> = [];
+    const deferred = deferredImageSave();
+    const ctx = await imageBoot(deferred.saveImages);
+    const runner = await createRunner(
+      ctx,
+      capture(messages, disconnectListeners),
+    );
+    const agent = ctx.get("agents")?.roots()[0];
+    if (agent === undefined) throw new Error("live agent was not mounted");
+    const followup = vi.spyOn(agent, "followup");
+
+    runner.submit("disconnect this", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+    await deferred.started;
+    for (const disconnect of disconnectListeners) disconnect();
+    deferred.release();
+
+    await waitFor(() =>
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "submit-rejected",
+      ),
+    );
+    expect(followup).not.toHaveBeenCalled();
+    expect(
+      agent.session.events.some((event) => event.type === "turn/start"),
+    ).toBe(false);
   });
 
   it("emits next-request context after a completed turn", async () => {
