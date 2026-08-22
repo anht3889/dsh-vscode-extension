@@ -2,6 +2,18 @@
   "name": "@dsh-vscode/bridge",
   "version": "0.1.0",
   "type": "module",
+  "main": "./lib/index.js",
+  "files": ["lib", "cordis.patch.yml"],
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "scripts": {
     "test": "vitest run",
     "build": "tsc -p tsconfig.json",

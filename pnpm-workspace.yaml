@@ -4,7 +4,10 @@ packages:
 allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": false
   "@google/genai": false
+  '@vscode/vsce-sign': true
   esbuild: false
+  keytar: true
   koffi: false
   node-pty: false
   protobufjs: false
+  sharp: true

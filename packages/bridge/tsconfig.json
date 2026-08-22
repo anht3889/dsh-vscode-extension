@@ -3,7 +3,13 @@
   "compilerOptions": {
     "types": ["node"],
     "strict": true,
-    "noEmit": true
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "lib",
+    "rootDir": "src",
+    "declaration": true,
+    "noEmit": false
   },
-  "include": ["src", "test"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
 }

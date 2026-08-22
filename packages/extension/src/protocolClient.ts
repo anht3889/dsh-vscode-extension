@@ -10,6 +10,9 @@ export interface ChildIo {
 export class ProtocolClient {
   private readonly child: ChildIo;
   private readonly listeners = new Set<(m: OutboundMessage) => void>();
+  /** Messages that arrived before any listener subscribed — replayed on subscribe
+   *  so late listeners (e.g. a handshake-then-test pattern) never miss events. */
+  private readonly history: OutboundMessage[] = [];
 
   constructor(child: ChildIo) {
     this.child = child;
@@ -24,6 +27,7 @@ export class ProtocolClient {
         return;
       }
       if (isOutboundMessage(m)) {
+        this.history.push(m);
         for (const cb of this.listeners) cb(m);
       }
     });
@@ -34,6 +38,8 @@ export class ProtocolClient {
   }
 
   onMessage(cb: (m: OutboundMessage) => void): void {
+    // Replay every message that arrived before this listener subscribed.
+    for (const m of this.history) cb(m);
     this.listeners.add(cb);
   }
 
