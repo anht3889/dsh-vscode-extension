@@ -1,6 +1,10 @@
 # Files excluded from the packaged .vsix.
 # `vsce package` ships everything not ignored here; keep `dist/**` (the built
-# runtime bundle that MUST ship) and `resources/**` (the activity-bar icon).
+# runtime bundle that MUST ship), `resources/dsh.svg` (the activity-bar icon)
+# and `resources/dsh.png` (the marketplace icon).
+
+# full-colour master artwork; only used to regenerate the two shipped icons
+resources/dsh-logo.svg
 
 # source (TypeScript + tests) — not needed at runtime
 src/**
