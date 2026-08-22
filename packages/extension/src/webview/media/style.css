@@ -147,7 +147,9 @@ body,
    The composer is excluded from the border cue on purpose: recolouring its
    full-width border reads as a box around the chat area, not an input cue. */
 .dsh-recent-search:focus,
-.dsh-select:focus {
+.dsh-attachment-search:focus,
+.dsh-select:focus,
+.dsh-chip-remove:focus {
   outline: none;
   border-color: var(--vscode-focusBorder, var(--dsh-accent));
 }
@@ -224,6 +226,7 @@ body,
 }
 
 .dsh-composer {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -232,6 +235,131 @@ body,
   border: 1px solid var(--dsh-border);
   border-radius: 16px;
   background: var(--dsh-input);
+}
+
+.dsh-attachment-picker {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 8px;
+  right: 8px;
+  z-index: 5;
+  max-width: 420px;
+  padding: 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 12px;
+  background: var(--vscode-menu-background, var(--dsh-bg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.dsh-attachment-search {
+  box-sizing: border-box;
+  width: 100%;
+  height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 7px;
+  outline: none;
+  color: var(--dsh-fg);
+  background: var(--dsh-input);
+}
+
+.dsh-attachment-actions {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+
+.dsh-attachment-list {
+  max-height: 180px;
+  margin-top: 6px;
+  overflow-y: auto;
+}
+
+.dsh-attachment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--dsh-fg);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-attachment-row:hover {
+  background: var(--dsh-hover);
+}
+
+.dsh-attachment-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-attachment-kind {
+  color: var(--dsh-muted);
+  font-size: 11px;
+}
+
+.dsh-chip-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 72px;
+  overflow: auto;
+}
+
+.dsh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsh-fg) 6%, transparent);
+}
+
+.dsh-chip svg {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dsh-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.dsh-chip-thumbnail {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.dsh-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--dsh-muted);
+  background: transparent;
+  cursor: pointer;
 }
 
 .dsh-composer-input {

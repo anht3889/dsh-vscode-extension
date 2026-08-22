@@ -1,10 +1,18 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef } from "react";
 import type {
   CatalogPayload,
   ContextPayload,
+  FileReferenceItem,
   PermissionsPayload,
 } from "@dsh-vscode/contract";
-import { contextPercent } from "../store.js";
+import {
+  contextPercent,
+  serializeDraft,
+  type DraftChip,
+  type PickerState,
+} from "../store.js";
+import { AttachmentPicker } from "./AttachmentPicker.js";
+import { ChipRail } from "./ChipRail.js";
 
 interface ComposerProps {
   ready: boolean;
@@ -12,7 +20,19 @@ interface ComposerProps {
   permissions: PermissionsPayload | undefined;
   context: ContextPayload | undefined;
   status: "idle" | "thinking" | "awaiting-approval" | "error";
-  onSubmit(text: string): void;
+  draft: string;
+  chips: DraftChip[];
+  picker: PickerState | undefined;
+  submitPending: boolean;
+  onDraftChange(text: string, selectionStart: number): void;
+  onOpenPicker(selectionStart: number): void;
+  onPickerQuery(query: string): void;
+  onPickReference(item: FileReferenceItem): void;
+  onDismissPicker(): void;
+  onRemoveChip(id: string): void;
+  onBrowseFolder(): void;
+  onAttachImage(): void;
+  onSubmit(): void;
   onCancel(): void;
   onSelectModel(provider: string, model: string): void;
   onSelectPermission(preset: string): void;
@@ -21,26 +41,59 @@ interface ComposerProps {
 
 const MODEL_SEPARATOR = "\u0000";
 
+function PlusIcon(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+
 export function Composer({
   ready,
   models,
   permissions,
   context,
   status,
+  draft,
+  chips,
+  picker,
+  submitPending,
+  onDraftChange,
+  onOpenPicker,
+  onPickerQuery,
+  onPickReference,
+  onDismissPicker,
+  onRemoveChip,
+  onBrowseFolder,
+  onAttachImage,
   onSubmit,
   onCancel,
   onSelectModel,
   onSelectPermission,
   onRequestFullAccess,
 }: ComposerProps): JSX.Element {
-  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const payload = serializeDraft({ draft, chips });
+  const sendDisabled =
+    !ready ||
+    submitPending ||
+    (payload.text === "" && payload.images === undefined);
 
   const send = useCallback((): void => {
-    const t = text.trim();
-    if (!ready || t.length === 0) return;
-    onSubmit(t);
-    setText("");
-  }, [onSubmit, ready, text]);
+    if (status === "thinking" || sendDisabled) return;
+    onSubmit();
+  }, [onSubmit, sendDisabled, status]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -71,12 +124,30 @@ export function Composer({
 
   return (
     <footer className="dsh-composer">
+      {picker !== undefined ? (
+        <AttachmentPicker
+          query={picker.query}
+          items={picker.items}
+          unavailable={picker.unavailable}
+          onQuery={onPickerQuery}
+          onPick={onPickReference}
+          onBrowseFolder={onBrowseFolder}
+          onAttachImage={onAttachImage}
+          onDismiss={onDismissPicker}
+        />
+      ) : null}
+      {chips.length > 0 ? (
+        <ChipRail chips={chips} onRemove={onRemoveChip} />
+      ) : null}
       <textarea
+        ref={inputRef}
         className="dsh-composer-input"
         rows={3}
-        value={text}
+        value={draft}
         placeholder="Message DSH…"
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) =>
+          onDraftChange(e.target.value, e.target.selectionStart)
+        }
         onKeyDown={onKeyDown}
       />
       <div className="dsh-composer-toolbar">
@@ -121,6 +192,19 @@ export function Composer({
           </select>
         </div>
         <div className="dsh-composer-actions">
+          <button
+            className="dsh-icon-button"
+            type="button"
+            title="Attach"
+            aria-label="Attach files, folders, or images"
+            disabled={!ready}
+            onClick={() => {
+              inputRef.current?.focus();
+              onOpenPicker(inputRef.current?.selectionStart ?? draft.length);
+            }}
+          >
+            <PlusIcon />
+          </button>
           {percent !== undefined && context !== undefined ? (
             <div
               className="dsh-context-meter"
@@ -147,9 +231,7 @@ export function Composer({
             title={status === "thinking" ? "Stop" : "Send"}
             aria-label={status === "thinking" ? "Stop response" : "Send message"}
             onClick={status === "thinking" ? onCancel : send}
-            disabled={
-              status !== "thinking" && (!ready || text.trim().length === 0)
-            }
+            disabled={status !== "thinking" && sendDisabled}
           >
             {status === "thinking" ? (
               <span className="dsh-stop-icon" aria-hidden="true" />
