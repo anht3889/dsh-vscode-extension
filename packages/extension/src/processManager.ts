@@ -6,6 +6,12 @@ export interface ProcessManagerOptions {
   argsFor(): string[];
   /** Optional sink for the child's stderr (line-buffered, UTF-8). */
   onStderr?(text: string): void;
+  /** Optional notification when a managed child exits (code + signal). */
+  onExit?(folder: string, code: number | null, signal: NodeJS.Signals | null): void;
+  /** Optional notification when a child fails to spawn (e.g. ENOENT on the binary). */
+  onError?(folder: string, error: Error): void;
+  /** Maximum ms to wait for the first stdout line (handshake). Default 5000. */
+  handshakeTimeoutMs?: number;
 }
 
 interface RunningProcess {
@@ -21,9 +27,13 @@ export class ProcessManager {
     this.options = opts;
   }
 
+  /** Spawn the binary and wait for the first stdout line (the `hello` handshake).
+   *  Rejects if the child errors before producing any output or if no line appears
+   *  within the handshake window — any failure that leaves a submit silently
+   *  writing into a dead pipe is converted to a visible rejection. */
   async start(
     folder: string
-  ): Promise<{ client: ProtocolClient; stop(): Promise<void> }> {
+  ): Promise<{ client: ProtocolClient; child: ChildProcess; stop(): void }> {
     const binary = this.options.resolveBinary();
     const args = this.options.argsFor();
 
@@ -57,11 +67,81 @@ export class ProcessManager {
     }
 
     const client = new ProtocolClient({ stdout, stdin });
+
+    // Wait until the client sees the `hello` handshake (via its own stdout
+    // readline, avoiding a race with a separate readline on the same stream).
+    // A spawn ENOENT, profile-not-found crash, or silent no-op boot all reject
+    // the Promise — which the caller surfaces as a visible error.
+    const handshakeMs = this.options.handshakeTimeoutMs ?? 5000;
+    let unsubscribe = (): void => {};
+    const ready = new Promise<void>((resolve, reject) => {
+      let settled = false;
+
+      unsubscribe = client.onMessage((m) => {
+        if (settled) return;
+        if (m.kind === "hello") {
+          settled = true;
+          resolve();
+        }
+      }, { consumeHistory: false });
+      if (settled) unsubscribe();
+
+      child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        this.options.onError?.(folder, err);
+        reject(err);
+      });
+
+      child.on("exit", (code, signal) => {
+        if (settled) return;
+        settled = true;
+        const why =
+          code !== null && code !== 0
+            ? `dsh exited with code ${code} before handshake`
+            : signal
+              ? `dsh terminated by ${signal} before handshake`
+              : "dsh exited before handshake";
+        const err = new Error(why);
+        this.options.onError?.(folder, err);
+        reject(err);
+      });
+
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const err = new Error(`no handshake from ${binary} after ${handshakeMs}ms`);
+        this.options.onError?.(folder, err);
+        child.kill("SIGTERM");
+        reject(err);
+      }, handshakeMs);
+    });
+
+    // Block until the handshake arrives or the child fails.
+    try {
+      await ready;
+    } finally {
+      unsubscribe();
+    }
     this.running.set(folder, { child, client });
+
+    // After handshake: a later exit (post-boot crash) is still surfaced.
+    child.on("exit", (code, signal) => {
+      if (this.running.get(folder)?.child === child) {
+        this.running.delete(folder);
+        this.options.onExit?.(folder, code, signal);
+      }
+    });
 
     return {
       client,
-      stop: () => this.stop(folder),
+      child,
+      stop: () => {
+        this.running.delete(folder);
+        this.options.onExit?.(folder, null, null);
+        try { client.send({ kind: "exit" }); } catch { /* ignore */ }
+        child.kill("SIGTERM");
+      },
     };
   }
 

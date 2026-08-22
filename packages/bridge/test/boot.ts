@@ -15,11 +15,13 @@ import AgentLoop from "@deepseek-ai/dsh-agent-loop";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import ToolRuntime from "@deepseek-ai/dsh-tools";
 import { apply as applyDeepseekAdapter } from "@deepseek-ai/dsh-llm-deepseek";
+import JsonlSessionPersistence from "@deepseek-ai/dsh-session-persistence-jsonl";
 
 export interface BootOptions {
   baseURL: string;
   provider: string;
   model: string;
+  persistenceRoot?: string;
 }
 
 /**
@@ -33,6 +35,12 @@ export async function bootTree(opts: BootOptions): Promise<Context> {
   await ctx.plugin(timer);
   await ctx.plugin(SystemPrompt, { persona: "" });
   await ctx.plugin(SessionStore);
+  if (opts.persistenceRoot !== undefined) {
+    await ctx.plugin(JsonlSessionPersistence, {
+      root: opts.persistenceRoot,
+      compression: "none",
+    });
+  }
 
   // The LLM runtime (ctx.llm) before anything that registers adapters on it.
   await ctx.plugin(LlmRuntime);
@@ -56,7 +64,7 @@ export async function bootTree(opts: BootOptions): Promise<Context> {
     {
       baseURL: opts.baseURL,
       apiKeyEnv: "DEEPSEEK_API_KEY",
-      models: [{ id: opts.model }],
+      models: [{ id: opts.model, contextWindow: 128_000 }],
     },
   );
 

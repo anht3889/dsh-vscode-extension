@@ -1,13 +1,13 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { AskUserQuestionAnswer } from "@deepseek-ai/dsh-user-questions";
 import type { AskAnswerWire, InboundMessage } from "@dsh-vscode/contract";
-import type { RetainedRunner } from "./runner.js";
+import type { SessionController } from "./runner.js";
 import type { ResolvableUserQuestionProvider } from "./user-questions.js";
 
 /** The front-controller hooks `dispatchCommand` routes inbound messages onto. */
 export interface CommandHooks {
-  /** The retained runner's submit/cancel surface. */
-  runner: RetainedRunner;
+  /** Session command surface the dispatcher forwards protocol v2 messages onto. */
+  runner: SessionController;
   /** The user-questions provider that settles a pending ask by id. */
   provider: ResolvableUserQuestionProvider;
 }
@@ -32,15 +32,13 @@ function wireToAnswer(wire: AskAnswerWire): AskUserQuestionAnswer {
  * Map one inbound extension command onto the runner and the user-questions
  * provider.
  *
- * - `submit` → `runner.submit(text)` (queues a follow-up turn on the retained agent).
+ * - `submit` → `runner.submit(text, opts)` (queues a follow-up turn on the retained agent).
  * - `cancel` → `runner.cancel()` (user-initiated abort of the active turn).
  * - `answer` → `provider.resolve(askId, wireToAnswer(answered))`.
+ * - session lifecycle commands → the matching {@link SessionController} method.
  * - `exit`   → no-op here: runner disposal/session finalization and the actual
  *              process exit are owned by the plugin `apply` seam, which reads
  *              `ctx.appExit` and never hard-exits under test.
- * - `resume` → documented no-op seam: the retained runner always starts fresh;
- *              session reload from a persisted `sessionId` is out of scope for
- *              Task 5 and would be added as a runner capability here.
  */
 export function dispatchCommand(
   ctx: Context,
@@ -49,7 +47,11 @@ export function dispatchCommand(
 ): void {
   switch (msg.kind) {
     case "submit":
-      hooks.runner.submit(msg.text);
+      hooks.runner.submit(msg.text, {
+        ...(msg.provider !== undefined ? { provider: msg.provider } : {}),
+        ...(msg.model !== undefined ? { model: msg.model } : {}),
+        ...(msg.permission !== undefined ? { permission: msg.permission } : {}),
+      });
       return;
     case "cancel":
       hooks.runner.cancel();
@@ -57,14 +59,26 @@ export function dispatchCommand(
     case "answer":
       hooks.provider.resolve(msg.askId, wireToAnswer(msg.answered));
       return;
-    case "exit":
+    case "listSessions":
+      hooks.runner.listSessions();
+      return;
+    case "newSession":
+      hooks.runner.newSession();
+      return;
     case "resume":
-      // See doc comment: exit is owned by `apply`; resume is a seam.
+      hooks.runner.resume(msg.sessionId);
+      return;
+    case "selectModel":
+      hooks.runner.selectModel(msg.provider, msg.model);
+      return;
+    case "selectPermission":
+      hooks.runner.selectPermission(msg.preset);
+      return;
+    case "exit":
       return;
     default: {
       const _exhaustive: never = msg;
       void _exhaustive;
-      return;
     }
   }
 }

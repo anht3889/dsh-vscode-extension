@@ -5,6 +5,7 @@ import type {
   AskUserQuestionRequest,
   UserQuestionProvider,
 } from "@deepseek-ai/dsh-user-questions";
+import { UserQuestionError } from "@deepseek-ai/dsh-user-questions";
 import type { AskQuestionWire } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
 
@@ -39,10 +40,31 @@ export function createUserQuestionProvider(
   return {
     ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
       const askId = randomUUID();
-      const promise = new Promise<AskUserQuestionAnswer>((resolve) => {
-        pending.set(askId, { resolve });
+      const signal = request.signal;
+      const promise = new Promise<AskUserQuestionAnswer>((resolve, reject) => {
+        const abortError = (): UserQuestionError =>
+          new UserQuestionError("User question was cancelled", "ASK_ABORTED", {
+            cause: signal?.reason,
+          });
+        const abort = (): void => {
+          if (!pending.delete(askId)) return;
+          reject(abortError());
+        };
+        if (signal?.aborted === true) {
+          reject(abortError());
+          return;
+        }
+        pending.set(askId, {
+          resolve: (answered) => {
+            signal?.removeEventListener("abort", abort);
+            resolve(answered);
+          },
+        });
+        signal?.addEventListener("abort", abort, { once: true });
       });
-      io.send({ kind: "ask", askId, questions: mapQuestions(request.questions) });
+      if (signal?.aborted !== true) {
+        io.send({ kind: "ask", askId, questions: mapQuestions(request.questions) });
+      }
       return promise;
     },
 

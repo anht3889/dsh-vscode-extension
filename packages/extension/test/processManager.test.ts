@@ -66,13 +66,16 @@ describe("ProcessManager", () => {
     const { client, stop } = await pm.start(tmpFolder());
 
     try {
+      // The replay-buffer guarantees late listeners see messages that arrived
+      // before subscription, so waitForMessage still catches the hello even
+      // though start() already consumed it for the handshake guard.
       const hello = await waitForMessage(client, (m) => m.kind === "hello");
       expect(hello).toMatchObject({ kind: "hello", version: 1, dshVersion: "fake" });
       expect((hello as { cwd: string }).cwd).toBeTruthy();
     } finally {
-      await stop();
+      stop();
     }
-  });
+  }, 10000);
 
   it("relays child stderr to the onStderr sink", async () => {
     const received: string[] = [];
@@ -85,7 +88,8 @@ describe("ProcessManager", () => {
     const { client, stop } = await pm.start(folder);
 
     try {
-      // Wait until the child is ready (its hello already arrived).
+      // Handshake already validated by start(); the replay buffer guarantees
+      // late listeners see every prior message, so hello is still observable.
       await waitForMessage(client, (m) => m.kind === "hello");
       // Trigger a stderr write in the fake child via its raw stdin (the
       // `stderr` trigger is a fixture-only keyword, not a protocol `InboundMessage`).
@@ -95,9 +99,9 @@ describe("ProcessManager", () => {
       await waitFor(() => received.length >= 1, 5000);
       expect(received).toContain("boom");
     } finally {
-      await stop();
+      stop();
     }
-  });
+  }, 10000);
 
   it("hasRunning(folder) is true after start and false after stop", async () => {
     const pm = makeManager();
@@ -108,7 +112,7 @@ describe("ProcessManager", () => {
 
     await pm.stop(folder);
     expect(pm.hasRunning(folder)).toBe(false);
-  });
+  }, 10000);
 
   it("stop() terminates the child; a second stop is a no-op", async () => {
     const pm = makeManager();
@@ -126,7 +130,7 @@ describe("ProcessManager", () => {
     // second stop must not throw
     await pm.stop(folder);
     expect(pm.hasRunning(folder)).toBe(false);
-  });
+  }, 10000);
 
   it("stop() stops only the given folder's process", async () => {
     const pm = makeManager();

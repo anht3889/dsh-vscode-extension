@@ -95,4 +95,21 @@ describe("createUserQuestionProvider", () => {
     // Clean up: settle the real ask so the promise does not leak an open handle.
     provider.resolve((sent[0] as { askId: string }).askId, { answers: [] });
   });
+
+  it("rejects and removes a pending ask when its owner is cancelled", async () => {
+    const { io, sent } = makeIo();
+    const provider = createUserQuestionProvider(io);
+    const controller = new AbortController();
+
+    const pending = provider.ask({
+      questions: [{ id: "a", question: "A?" }],
+      signal: controller.signal,
+    });
+    controller.abort(new Error("turn cancelled"));
+
+    await expect(pending).rejects.toMatchObject({ code: "ASK_ABORTED" });
+    const ask = sent[0];
+    if (ask.kind !== "ask") throw new Error("missing ask");
+    expect(() => provider.resolve(ask.askId, { answers: [] })).not.toThrow();
+  });
 });

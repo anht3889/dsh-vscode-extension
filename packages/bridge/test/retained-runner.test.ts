@@ -41,7 +41,7 @@ describe("createRunner (retained)", () => {
     delete process.env.DEEPSEEK_API_KEY;
   });
 
-  it("emits a hello handshake as the FIRST outbound message", async () => {
+  it("emits hello, session, then ready in order", async () => {
     const messages: OutboundMessage[] = [];
     const io = capture(messages);
     const ctx = await bootTree({
@@ -59,6 +59,25 @@ describe("createRunner (retained)", () => {
       expect(first.version).toBe(PROTOCOL_VERSION);
       expect(first.dshVersion).toBe("0.1.0");
       expect(first.cwd).toBe(process.cwd());
+    }
+
+    const lifecycle = messages.filter(
+      (message) =>
+        message.kind === "hello" ||
+        message.kind === "session" ||
+        message.kind === "ready",
+    );
+    expect(lifecycle.map((message) => message.kind)).toEqual([
+      "hello",
+      "session",
+      "ready",
+    ]);
+    const ready = lifecycle.at(-1);
+    expect(ready).toBeDefined();
+    if (ready?.kind === "ready") {
+      expect(ready.sessionId).toEqual(expect.any(String));
+      expect(ready.permissions.current).toBe("workspace-write");
+      expect(ready.models.current.model).toBe("mock-model");
     }
   }, 60_000);
 

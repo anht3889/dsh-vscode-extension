@@ -27,7 +27,11 @@ import * as vscode from "vscode";
 
 // Candidate extension ids. The scope is the npm package name (`@dsh-vscode/…`);
 // once a real `publisher` is set and published, the id becomes `<publisher>.<name>`.
-const CANDIDATE_IDS = ["@dsh-vscode/extension", "dsh.@dsh-vscode/extension"];
+const CANDIDATE_IDS = [
+  "dsh.dsh",
+  "@dsh-vscode/extension",
+  "dsh.@dsh-vscode/extension",
+];
 
 function findExtension(): vscode.Extension<unknown> | undefined {
   for (const id of CANDIDATE_IDS) {

@@ -4,13 +4,19 @@ DSH (DeepSeek Harness) control plane for Visual Studio Code — an AI coding age
 chat sidecar that drives a headless `dsh` process and renders turns, tool calls,
 diffs, and approval prompts inside a VS Code webview.
 
+The chat header exposes workspace-scoped recent sessions and New Chat. The
+squircle composer selects the current session's permission preset and model,
+shows next-request context usage, and sends with Enter (Shift+Enter inserts a
+newline). Full Access requires confirmation once per chat. Settings is reserved
+for a later release.
+
 pnpm monorepo with three workspace packages:
 
 | Package | Role |
 | --- | --- |
 | `@dsh-vscode/contract` | Dependency-free wire protocol (ndjson messages) shared by extension ↔ bridge |
 | `@dsh-vscode/bridge`   | Drives the real `dsh` agent runtime and speaks the contract protocol |
-| `@dsh-vscode/extension` | The VS Code extension: webview UI, process manager, protocol client |
+| `dsh` | The VS Code extension: webview UI, process manager, protocol client |
 
 ## Install / run
 
@@ -31,6 +37,8 @@ To run the extension in a VS Code Extension Development Host:
 
 - `dsh.binaryPath` — path to the `dsh` binary. Empty (default) means the
   extension resolves `dsh` from `PATH`.
+- `DSH_HOME` — optional harness-home override. Recent chats use the base
+  profile's `<DSH_HOME>/sessions` JSONL directory.
 
 ## Commands
 

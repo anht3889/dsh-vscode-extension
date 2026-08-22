@@ -1,13 +1,15 @@
 {
-  "name": "@dsh-vscode/extension",
+  "name": "dsh",
   "displayName": "DSH",
   "description": "DSH (DeepSeek Harness) control plane for VS Code — an AI coding agent chat sidecar.",
   "version": "0.1.0",
   "publisher": "dsh",
   "license": "MIT",
-  "icon": "resources/dsh.svg",
+  "icon": "resources/dsh.png",
   "type": "module",
-  "engines": { "vscode": "^1.90.0" },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
   "main": "./dist/extension.js",
   "repository": {
     "type": "git",
@@ -15,26 +17,74 @@
   },
   "homepage": "https://github.com/your-org/dsh-vscode-extension#readme",
   "readme": "README.md",
-  "activationEvents": ["onView:dsh.chat", "onCommand:dsh.start"],
+  "activationEvents": [
+    "onView:dsh.chat",
+    "onCommand:dsh.start"
+  ],
   "contributes": {
     "commands": [
-      { "command": "dsh.start", "title": "DSH: Start", "category": "DSH" },
-      { "command": "dsh.stop", "title": "DSH: Stop", "category": "DSH" }
+      {
+        "command": "dsh.start",
+        "title": "DSH: Start",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.stop",
+        "title": "DSH: Stop",
+        "category": "DSH"
+      }
     ],
     "viewsContainers": {
-      "activitybar": [ { "id": "dsh", "title": "DSH", "icon": "resources/dsh.svg" } ]
+      "activitybar": [
+        {
+          "id": "dsh",
+          "title": "DSH",
+          "icon": "resources/dsh.svg"
+        }
+      ]
     },
     "views": {
-      "dsh": [ { "type": "webview", "id": "dsh.chat", "name": "Chat" } ]
+      "dsh": [
+        {
+          "type": "webview",
+          "id": "dsh.chat",
+          "name": "Chat"
+        }
+      ]
     },
     "configuration": {
       "title": "DSH",
       "properties": {
-        "dsh.binaryPath": { "type": "string", "default": "", "description": "Path to the dsh binary (empty = use PATH)." }
+        "dsh.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the dsh binary (empty = use PATH)."
+        }
       }
     }
   },
-  "dependencies": { "@dsh-vscode/contract": "workspace:0.1.0", "react": "^18.3.1", "react-dom": "^18.3.1" },
-  "devDependencies": { "@types/node": "^20.14.0", "@types/react": "^18.3.3", "@types/react-dom": "^18.3.0", "@types/vscode": "^1.90.0", "@vscode/test-electron": "^2.4.1", "esbuild": "^0.21.0", "typescript": "^5", "vitest": "^3" },
-  "scripts": { "build": "node esbuild.mjs", "test": "vitest run", "typecheck": "tsc --noEmit", "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit", "test:e2e": "node e2e-build.mjs && node dist-test/e2e.run.js" }
+  "dependencies": {
+    "@dsh-vscode/contract": "workspace:0.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3",
+    "esbuild": "^0.21.0",
+    "typescript": "^5",
+    "vitest": "^3"
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "package": "vsce package --no-dependencies",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
+    "test:e2e": "node e2e-build.mjs && node dist-test/e2e.run.js"
+  }
 }

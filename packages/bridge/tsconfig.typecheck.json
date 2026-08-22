@@ -5,11 +5,7 @@
     "strict": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "lib",
-    "rootDir": "src",
-    "declaration": true,
-    "noEmit": false
+    "noEmit": true
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src", "test"]
 }
