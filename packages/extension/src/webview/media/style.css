@@ -140,12 +140,20 @@ body,
   background: var(--dsh-input);
 }
 
-/* The composer is excluded on purpose: recolouring its full-width border on
-   focus reads as a box drawn around the chat area rather than an input cue.
-   Its caret is the focus indicator. */
+/* The host injects `a:focus, input:focus, select:focus, textarea:focus { outline:
+   1px solid -webkit-focus-ring-color; outline-offset: -1px }` into every webview.
+   Those selectors outrank a plain class, so every focus rule here must state
+   `outline` to keep the host ring from drawing a second box inside our own.
+   The composer is excluded from the border cue on purpose: recolouring its
+   full-width border reads as a box around the chat area, not an input cue. */
 .dsh-recent-search:focus,
 .dsh-select:focus {
+  outline: none;
   border-color: var(--vscode-focusBorder, var(--dsh-accent));
+}
+
+.dsh-composer-input:focus {
+  outline: none;
 }
 
 .dsh-recent-list {
