@@ -140,9 +140,11 @@ body,
   background: var(--dsh-input);
 }
 
+/* The composer is excluded on purpose: recolouring its full-width border on
+   focus reads as a box drawn around the chat area rather than an input cue.
+   Its caret is the focus indicator. */
 .dsh-recent-search:focus,
-.dsh-select:focus,
-.dsh-composer:focus-within {
+.dsh-select:focus {
   border-color: var(--vscode-focusBorder, var(--dsh-accent));
 }
 
