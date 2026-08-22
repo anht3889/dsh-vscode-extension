@@ -1,10 +1,16 @@
 import { describe, it, expect } from "vitest";
-import type { EventMessage, AskQuestionWire, OutboundMessage } from "@dsh-vscode/contract";
+import type {
+  EncodedImageAttachment,
+  EventMessage,
+  AskQuestionWire,
+  OutboundMessage,
+} from "@dsh-vscode/contract";
 import {
   contextPercent,
   filterSessions,
   reduce,
   initialState,
+  serializeDraft,
   type UiState,
 } from "./store.js";
 
@@ -34,6 +40,12 @@ const QUESTION: AskQuestionWire = {
   id: "q1",
   question: "Proceed?",
   options: [{ label: "Yes" }, { label: "No" }],
+};
+
+const PNG: EncodedImageAttachment = {
+  mediaType: "image/png",
+  data: "AQ==",
+  name: "shot.png",
 };
 
 function askMsg(askId = "a1"): OutboundMessage {
@@ -262,6 +274,252 @@ describe("reduce", () => {
     const s = reduce(errored, statusMsg("idle"));
     expect(s.error).toBeUndefined();
   });
+
+  it("opens at an @ token and ignores stale search replies", () => {
+    const opened = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "read @src",
+      token: { start: 5, end: 9, query: "src", quoted: false },
+      requestId: "r2",
+    });
+    const stale = reduce(opened, {
+      kind: "fileReferences",
+      requestId: "r1",
+      items: [{ path: "old", kind: "file" }],
+    });
+    expect(stale).toBe(opened);
+    expect(opened.picker).toMatchObject({
+      requestId: "r2",
+      query: "src",
+      tokenStart: 5,
+      tokenEnd: 9,
+    });
+  });
+
+  it("marks the current picker search unavailable", () => {
+    const opened = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "@",
+      token: { start: 0, end: 1, query: "", quoted: false },
+      requestId: "r1",
+    });
+    const unavailable = reduce(opened, {
+      kind: "fileReferences",
+      requestId: "r1",
+      items: [],
+      available: false,
+    });
+    expect(unavailable.picker?.unavailable).toBe(true);
+    expect(unavailable.picker?.items).toEqual([]);
+  });
+
+  it("replaces only the tracked token when the picker query changes", () => {
+    const opened = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "read @src and keep @docs",
+      token: { start: 5, end: 9, query: "src", quoted: false },
+      requestId: "r1",
+    });
+    const updated = reduce(opened, {
+      kind: "pickerQueryChanged",
+      query: "lib",
+      requestId: "r2",
+    });
+    expect(updated.draft).toBe("read @lib and keep @docs");
+    expect(updated.picker).toMatchObject({
+      requestId: "r2",
+      query: "lib",
+      tokenStart: 5,
+      tokenEnd: 9,
+      items: [],
+      unavailable: false,
+    });
+  });
+
+  it("removes a lonely @ on dismiss but retains a typed token", () => {
+    const lonely = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "read @",
+      token: { start: 5, end: 6, query: "", quoted: false },
+      requestId: "r1",
+    });
+    expect(reduce(lonely, { kind: "pickerDismissed" }).draft).toBe("read ");
+
+    const typed = reduce(lonely, {
+      kind: "pickerQueryChanged",
+      query: "src",
+      requestId: "r2",
+    });
+    expect(reduce(typed, { kind: "pickerDismissed" }).draft).toBe("read @src");
+  });
+
+  it("picks file and folder references by removing the trigger span", () => {
+    const opened = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "read @src now",
+      token: { start: 5, end: 9, query: "src", quoted: false },
+      requestId: "r1",
+    });
+    const file = reduce(opened, {
+      kind: "referencePicked",
+      id: "c1",
+      item: { path: "src/a.ts", kind: "file" },
+      mention: "@src/a.ts",
+    });
+    expect(file.draft).toBe("read  now");
+    expect(file.picker).toBeUndefined();
+    expect(file.chips).toEqual([
+      {
+        id: "c1",
+        kind: "file",
+        path: "src/a.ts",
+        mention: "@src/a.ts",
+        label: "a.ts",
+      },
+    ]);
+
+    const folder = reduce(file, {
+      kind: "folderPicked",
+      path: "src/lib",
+    });
+    expect(folder.chips[1]).toMatchObject({
+      kind: "folder",
+      path: "src/lib",
+      mention: "@src/lib/",
+      label: "lib",
+    });
+
+    const spacedFolder = reduce(folder, {
+      kind: "folderPicked",
+      path: "my folder",
+    });
+    expect(spacedFolder.chips[2]).toMatchObject({
+      path: "my folder",
+      mention: '@"my folder/',
+      label: "my folder",
+    });
+  });
+
+  it("appends image picks in order and removes chips by id", () => {
+    const picked = reduce(initialState, {
+      kind: "imagesPicked",
+      images: [
+        PNG,
+        { mediaType: "image/jpeg", data: "Ag==", name: "second.jpg" },
+      ],
+    });
+    expect(picked.chips.map((chip) => chip.label)).toEqual([
+      "shot.png",
+      "second.jpg",
+    ]);
+    const removed = reduce(picked, {
+      kind: "chipRemoved",
+      id: picked.chips[0]!.id,
+    });
+    expect(removed.chips.map((chip) => chip.label)).toEqual(["second.jpg"]);
+  });
+
+  it("clears draft attachments on session change and history replacement", () => {
+    const populated: UiState = {
+      ...initialState,
+      sessionId: "old",
+      draft: "keep",
+      chips: [
+        {
+          id: "c1",
+          kind: "file",
+          path: "src/a.ts",
+          mention: "@src/a.ts",
+          label: "a.ts",
+        },
+      ],
+    };
+    const changed = reduce(populated, {
+      kind: "session",
+      sessionId: "new",
+      cwd: "/tmp",
+      createdAt: 1,
+    });
+    expect(changed.draft).toBe("");
+    expect(changed.chips).toEqual([]);
+
+    const history = reduce(populated, {
+      kind: "history",
+      sessionId: "old",
+      events: [],
+    });
+    expect(history.draft).toBe("");
+    expect(history.chips).toEqual([]);
+  });
+
+  it("keeps draft attachments for foreign-session events", () => {
+    const populated: UiState = {
+      ...initialState,
+      sessionId: "parent",
+      draft: "keep",
+      chips: [
+        {
+          id: "c1",
+          kind: "image",
+          image: PNG,
+          label: "shot.png",
+        },
+      ],
+    };
+    const foreign = {
+      kind: "event",
+      sessionId: "child",
+      event: { type: "turn/start", seq: 1, time: 1, data: {} },
+    } satisfies OutboundMessage;
+    expect(reduce(populated, foreign)).toBe(populated);
+  });
+
+  it("retains draft on submit rejection and clears on current-session turn start", () => {
+    const populated: UiState = {
+      ...initialState,
+      sessionId: "s1",
+      draft: "look",
+      chips: [
+        {
+          id: "c1",
+          kind: "image",
+          image: PNG,
+          label: "shot.png",
+        },
+      ],
+    };
+    const pending = reduce(populated, { kind: "submitStarted" });
+    const rejected = reduce(pending, {
+      kind: "status",
+      state: "error",
+      code: "submit-rejected",
+      detail: "model has no image input",
+    });
+    expect(rejected.draft).toBe("look");
+    expect(rejected.chips).toHaveLength(1);
+    expect(rejected.submitPending).toBe(false);
+
+    const accepted = reduce(pending, eventMsg("turn/start", {}));
+    expect(accepted.draft).toBe("");
+    expect(accepted.chips).toEqual([]);
+    expect(accepted.submitPending).toBe(false);
+  });
+
+  it("does not clear a pending submit on foreign-session turn start", () => {
+    const pending: UiState = {
+      ...initialState,
+      sessionId: "parent",
+      draft: "keep",
+      chips: [],
+      submitPending: true,
+    };
+    const foreign = {
+      kind: "event",
+      sessionId: "child",
+      event: { type: "turn/start", seq: 1, time: 1, data: {} },
+    } satisfies OutboundMessage;
+    expect(reduce(pending, foreign)).toBe(pending);
+  });
 });
 
 describe("composer helpers", () => {
@@ -291,5 +549,43 @@ describe("composer helpers", () => {
     expect(contextPercent(undefined)).toBeUndefined();
     expect(contextPercent({ used: 50, window: 100 })).toBe(50);
     expect(contextPercent({ used: 150, window: 100 })).toBe(100);
+  });
+
+  it("serializes trimmed body, reference mentions, and images in rail order", () => {
+    expect(
+      serializeDraft({
+        draft: "  review this  ",
+        chips: [
+          {
+            id: "c1",
+            kind: "file",
+            path: "src/a.ts",
+            mention: "@src/a.ts",
+            label: "a.ts",
+          },
+          { id: "c2", kind: "image", image: PNG, label: "shot.png" },
+          {
+            id: "c3",
+            kind: "folder",
+            path: "src/lib",
+            mention: "@src/lib/",
+            label: "lib",
+          },
+        ],
+      }),
+    ).toEqual({
+      text: "review this @src/a.ts @src/lib/",
+      images: [PNG],
+    });
+  });
+
+  it("returns empty text for image-only drafts and omits empty image arrays", () => {
+    expect(
+      serializeDraft({
+        draft: " ",
+        chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
+      }),
+    ).toEqual({ text: "", images: [PNG] });
+    expect(serializeDraft({ draft: "", chips: [] })).toEqual({ text: "" });
   });
 });
