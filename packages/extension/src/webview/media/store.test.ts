@@ -364,7 +364,6 @@ describe("reduce", () => {
       kind: "referencePicked",
       id: "c1",
       item: { path: "src/a.ts", kind: "file" },
-      mention: "@src/a.ts",
     });
     expect(file.draft).toBe("read  now");
     expect(file.picker).toBeUndefined();
@@ -398,6 +397,60 @@ describe("reduce", () => {
       mention: '@"my folder/',
       label: "my folder",
     });
+  });
+
+  it("canonicalizes a picked reference from the tracked quote state", () => {
+    const opened = reduce(initialState, {
+      kind: "pickerOpened",
+      text: 'read @"src',
+      token: { start: 5, end: 10, query: "src", quoted: true },
+      requestId: "r1",
+    });
+    const picked = reduce(opened, {
+      kind: "referencePicked",
+      id: "c1",
+      item: { path: "src/a.ts", kind: "file" },
+    });
+    expect(picked.chips).toEqual([
+      {
+        id: "c1",
+        kind: "file",
+        path: "src/a.ts",
+        mention: '@"src/a.ts"',
+        label: "a.ts",
+      },
+    ]);
+    expect(picked.draft).toBe("read ");
+    expect(picked.picker).toBeUndefined();
+  });
+
+  it("retains the picker and reports an invalid picked path", () => {
+    const opened = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "read @bad",
+      token: { start: 5, end: 9, query: "bad", quoted: false },
+      requestId: "r1",
+    });
+    const rejected = reduce(opened, {
+      kind: "referencePicked",
+      id: "c1",
+      item: { path: "bad\nname", kind: "file" },
+    });
+    expect(rejected.chips).toEqual([]);
+    expect(rejected.draft).toBe("read @bad");
+    expect(rejected.picker).toBe(opened.picker);
+    expect(rejected.error).toBe("Selected path cannot be referenced");
+    expect(rejected.status).toBe("error");
+
+    const retried = reduce(rejected, {
+      kind: "referencePicked",
+      id: "c2",
+      item: { path: "src/a.ts", kind: "file" },
+    });
+    expect(retried.chips).toHaveLength(1);
+    expect(retried.error).toBeUndefined();
+    expect(retried.status).toBe("idle");
+    expect(retried.picker).toBeUndefined();
   });
 
   it("appends image picks in order and removes chips by id", () => {

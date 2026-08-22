@@ -143,7 +143,6 @@ interface ReferencePickedMessage {
   kind: "referencePicked";
   id: string;
   item: FileReferenceItem;
-  mention: string;
 }
 
 interface ChipRemovedMessage {
@@ -342,13 +341,23 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
 
     case "referencePicked": {
       if (state.picker === undefined) return state;
+      const mention = formatFileMention(msg.item, state.picker.quoted);
+      if (mention === undefined) {
+        return {
+          ...state,
+          error: "Selected path cannot be referenced",
+          status: "error",
+        };
+      }
       const chip: ReferenceChip = {
         id: msg.id,
         kind: msg.item.kind === "directory" ? "folder" : "file",
         path: msg.item.path,
-        mention: msg.mention,
+        mention,
         label: labelFromPath(msg.item.path),
       };
+      const retryingInvalidReference =
+        state.error === "Selected path cannot be referenced";
       return {
         ...state,
         draft:
@@ -356,6 +365,8 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
           state.draft.slice(state.picker.tokenEnd),
         chips: [...state.chips, chip],
         picker: undefined,
+        error: retryingInvalidReference ? undefined : state.error,
+        status: retryingInvalidReference ? "idle" : state.status,
       };
     }
 
