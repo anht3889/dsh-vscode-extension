@@ -240,7 +240,11 @@ export function App(): JSX.Element {
           />
         ) : null}
       </Header>
-      <StreamView stream={state.stream} diffs={state.diffs} onApply={apply} />
+      <StreamView
+        transcript={state.transcript}
+        diffs={state.diffs}
+        onApply={apply}
+      />
       {state.error ? (
         <div className="dsh-error" role="alert">
           {state.error}

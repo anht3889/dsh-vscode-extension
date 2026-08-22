@@ -4,6 +4,14 @@ DSH (DeepSeek Harness) control plane for Visual Studio Code — an AI coding age
 chat sidecar that drives a headless `dsh` process and renders turns, tool calls,
 diffs, and approval prompts inside a VS Code webview.
 
+The transcript shows your prompts verbatim and renders DSH's answers as markdown
+— headings, lists, tables, links, and fenced code blocks with a language label
+and a copy button — streaming in as the model writes. Model-authored raw HTML is
+escaped rather than parsed, and image references render as links, because the
+webview's CSP admits images only from the extension's own resources and a remote
+image URL would let model output make a request. Injected context messages
+(plugin, session-reference, and subagent-report sources) stay out of the view.
+
 The chat header exposes workspace-scoped recent sessions and New Chat. The
 squircle composer selects the current session's permission preset and model,
 shows next-request context usage, and sends with Enter (Shift+Enter inserts a

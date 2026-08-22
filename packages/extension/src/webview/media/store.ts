@@ -51,9 +51,22 @@ export interface PickerState {
   unavailable: boolean;
 }
 
+/**
+ * One rendered turn of the conversation.
+ *
+ * Assistant text is markdown source; user text is shown verbatim. `streaming`
+ * marks the entry that `text-delta` chunks are still appending to, which is
+ * also the entry `assistant/message` finalizes instead of duplicating.
+ */
+export interface TranscriptEntry {
+  role: "user" | "assistant";
+  text: string;
+  streaming: boolean;
+}
+
 export interface UiState {
-  /** Assistant text accumulated from `assistant/chunk` + `assistant/message`. */
-  stream: string[];
+  /** The conversation, folded from `user/message` and `assistant/*` events. */
+  transcript: TranscriptEntry[];
   /** The current pending approval (set by `ask`, kept until the matching answer). */
   approval: ApprovalState | undefined;
   /** File diffs extracted from `tool/result` events for DiffView. */
@@ -76,7 +89,7 @@ export interface UiState {
 }
 
 export const initialState: UiState = {
-  stream: [],
+  transcript: [],
   approval: undefined,
   diffs: [],
   error: undefined,
@@ -166,30 +179,105 @@ export type UiMessage =
   | SubmitStartedMessage;
 
 /**
- * Extract assistant text from an event's verbatim `data` record, tolerant of the
- * two shapes the bridge forwards: `assistant/chunk` ({text, delta?}) and
- * `assistant/message` ({message:{content:[{type:"text",text}]}}).
+ * Join the text blocks of one logged message's `content`. Non-text blocks
+ * (images, tool calls, reasoning) carry no transcript text and are skipped.
  */
-function assistantText(data: Record<string, unknown>): string | undefined {
-  const text = data.text;
-  if (typeof text === "string" && text.length > 0) return text;
-  const message = data.message;
-  if (typeof message === "object" && message !== null) {
-    const content = (message as { content?: unknown }).content;
-    if (Array.isArray(content)) {
-      for (const part of content) {
-        if (
-          typeof part === "object" &&
-          part !== null &&
-          (part as { type?: unknown }).type === "text"
-        ) {
-          const t = (part as { text?: unknown }).text;
-          if (typeof t === "string" && t.length > 0) return t;
-        }
-      }
-    }
+function messageText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    if ((block as { type?: unknown }).type !== "text") continue;
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text !== "") parts.push(text);
   }
-  return undefined;
+  return parts.join("\n\n");
+}
+
+/** Stop `text-delta` chunks from extending the newest assistant entry. */
+function closeStreaming(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const last = entries.at(-1);
+  if (last === undefined || last.role !== "assistant" || !last.streaming) {
+    return entries;
+  }
+  return [...entries.slice(0, -1), { ...last, streaming: false }];
+}
+
+/**
+ * Fold one session event into the transcript, returning the same array when the
+ * event contributes no text.
+ *
+ * Both live events and a resumed `history` reply go through here, so a resumed
+ * session reads exactly like the session that produced it. Only `source.kind`
+ * `"user"` messages are shown: plugin, session-reference, and subagent-report
+ * messages are injected context the person never typed.
+ */
+export function foldEvent(
+  entries: TranscriptEntry[],
+  event: SessionEventWire,
+): TranscriptEntry[] {
+  switch (event.type) {
+    case "user/message": {
+      const source: unknown = event.data.source;
+      const kind =
+        typeof source === "object" && source !== null
+          ? (source as { kind?: unknown }).kind
+          : undefined;
+      if (kind !== "user") return entries;
+      const text = messageText(event.data.content);
+      if (text === "") return entries;
+      return [
+        ...closeStreaming(entries),
+        { role: "user", text, streaming: false },
+      ];
+    }
+
+    case "assistant/chunk": {
+      const chunk: unknown = event.data.chunk;
+      if (typeof chunk !== "object" || chunk === null) return entries;
+      const { type, text } = chunk as { type?: unknown; text?: unknown };
+      // Only visible answer text streams into the transcript; reasoning and
+      // tool-call deltas are separate surfaces.
+      if (type !== "text-delta" || typeof text !== "string" || text === "") {
+        return entries;
+      }
+      const last = entries.at(-1);
+      if (last !== undefined && last.role === "assistant" && last.streaming) {
+        return [
+          ...entries.slice(0, -1),
+          { ...last, text: last.text + text },
+        ];
+      }
+      return [...entries, { role: "assistant", text, streaming: true }];
+    }
+
+    case "assistant/message": {
+      const message: unknown = event.data.message;
+      const content =
+        typeof message === "object" && message !== null
+          ? (message as { content?: unknown }).content
+          : undefined;
+      const text = messageText(content);
+      const last = entries.at(-1);
+      if (last !== undefined && last.role === "assistant" && last.streaming) {
+        // The assembled message is authoritative over the accumulated deltas,
+        // except when it holds no text at all (tool-call-only steps).
+        return [
+          ...entries.slice(0, -1),
+          {
+            role: "assistant",
+            text: text === "" ? last.text : text,
+            streaming: false,
+          },
+        ];
+      }
+      if (text === "") return entries;
+      return [...entries, { role: "assistant", text, streaming: false }];
+    }
+
+    default:
+      return entries;
+  }
 }
 
 /**
@@ -214,13 +302,6 @@ function diffFromRecord(value: unknown): ToolDiff | undefined {
 
 function diffFromEventData(data: Record<string, unknown>): ToolDiff | undefined {
   return diffFromRecord(data.meta) ?? diffFromRecord(data.arguments);
-}
-
-function eventText(event: SessionEventWire): string | undefined {
-  if (event.type !== "assistant/chunk" && event.type !== "assistant/message") {
-    return undefined;
-  }
-  return assistantText(event.data);
 }
 
 /** Filter recent sessions by case-insensitive title text. */
@@ -464,7 +545,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         sessionId: msg.sessionId,
         ...(changed
           ? {
-              stream: [],
+              transcript: [],
               diffs: [],
               approval: undefined,
               context: undefined,
@@ -481,9 +562,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       return {
         ...state,
         sessionId: msg.sessionId,
-        stream: msg.events
-          .map(eventText)
-          .filter((text): text is string => text !== undefined),
+        transcript: msg.events.reduce(foldEvent, []),
         diffs: [],
         approval: undefined,
         draft: "",
@@ -550,6 +629,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
           approval: undefined,
           diffs: [],
           status: "thinking",
+          transcript: closeStreaming(state.transcript),
           ...(state.submitPending
             ? {
                 draft: "",
@@ -563,12 +643,15 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       if (type === "turn/end") {
         return { ...state, approval: undefined, status: "idle" };
       }
-      if (type === "assistant/chunk" || type === "assistant/message") {
-        const text = assistantText(msg.event.data);
-        if (text !== undefined) {
-          return { ...state, stream: [...state.stream, text] };
-        }
-        return state;
+      if (
+        type === "user/message" ||
+        type === "assistant/chunk" ||
+        type === "assistant/message"
+      ) {
+        const transcript = foldEvent(state.transcript, msg.event);
+        return transcript === state.transcript
+          ? state
+          : { ...state, transcript };
       }
       if (type === "tool/result") {
         const diff = diffFromEventData(msg.event.data);

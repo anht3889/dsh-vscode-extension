@@ -208,12 +208,199 @@ body,
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
-.dsh-bubble {
-  white-space: pre-wrap;
+.dsh-turn {
   word-break: break-word;
+}
+
+/* The person's own words are shown verbatim, never parsed as markdown: what was
+   sent — including @mentions and pasted snippets — is what is displayed. */
+.dsh-turn-user {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--vscode-input-background, var(--dsh-input));
+}
+
+.dsh-turn-text {
+  white-space: pre-wrap;
+}
+
+/* ---- assistant markdown ---------------------------------------------------
+   Rendered by markdown-it (media/markdown.ts). Colours come from the editor's
+   own markdown-preview and text variables so the transcript follows the theme. */
+.dsh-md {
+  line-height: 1.5;
+}
+
+.dsh-md > :first-child {
+  margin-top: 0;
+}
+
+.dsh-md > :last-child {
+  margin-bottom: 0;
+}
+
+.dsh-md p {
+  margin: 0 0 8px;
+}
+
+.dsh-md h1,
+.dsh-md h2,
+.dsh-md h3,
+.dsh-md h4,
+.dsh-md h5,
+.dsh-md h6 {
+  margin: 14px 0 6px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.dsh-md h1 {
+  font-size: 1.4em;
+}
+
+.dsh-md h2 {
+  font-size: 1.25em;
+}
+
+.dsh-md h3 {
+  font-size: 1.1em;
+}
+
+.dsh-md h4,
+.dsh-md h5,
+.dsh-md h6 {
+  font-size: 1em;
+}
+
+.dsh-md h1,
+.dsh-md h2 {
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--dsh-border);
+}
+
+.dsh-md ul,
+.dsh-md ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.dsh-md li {
+  margin: 2px 0;
+}
+
+.dsh-md li > p {
+  margin: 0;
+}
+
+.dsh-md a,
+.dsh-md-image {
+  color: var(--vscode-textLink-foreground, var(--dsh-accent));
+}
+
+.dsh-md a:hover,
+.dsh-md-image:hover {
+  color: var(--vscode-textLink-activeForeground, var(--dsh-accent));
+}
+
+.dsh-md code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.95em;
+  color: var(--vscode-textPreformat-foreground, var(--dsh-fg));
+  background: var(--vscode-textPreformat-background, var(--dsh-hover));
+}
+
+.dsh-md blockquote {
+  margin: 8px 0;
+  padding: 4px 10px;
+  border-left: 4px solid var(--vscode-textBlockQuote-border, var(--dsh-border));
+  background: var(--vscode-textBlockQuote-background, transparent);
+}
+
+.dsh-md hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--dsh-border);
+}
+
+.dsh-md table {
+  margin: 8px 0;
+  border-collapse: collapse;
+}
+
+.dsh-md th,
+.dsh-md td {
+  padding: 3px 8px;
+  border: 1px solid var(--dsh-border);
+  text-align: left;
+}
+
+.dsh-md th {
+  background: var(--dsh-hover);
+}
+
+.dsh-code {
+  margin: 8px 0;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--vscode-textCodeBlock-background, var(--dsh-input));
+}
+
+.dsh-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 2px 8px;
+  border-bottom: 1px solid var(--dsh-border);
+  font-size: 11px;
+  color: var(--dsh-muted);
+}
+
+.dsh-code-lang {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.dsh-code-copy {
+  padding: 2px 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dsh-code-copy:hover {
+  background: var(--dsh-hover);
+  color: var(--dsh-fg);
+}
+
+.dsh-code-copy:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--dsh-accent));
+  outline-offset: -1px;
+}
+
+/* Code scrolls rather than wraps: a wrapped line in a narrow sidebar reads as a
+   different program than the one the model wrote. */
+.dsh-code pre {
+  margin: 0;
+  padding: 8px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.dsh-code code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-size: var(--vscode-editor-font-size, 12px);
 }
 
 .dsh-error {

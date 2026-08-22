@@ -26,13 +26,41 @@ function eventMsg(type: string, data: Record<string, unknown>): EventMessage {
   };
 }
 
-function textChunk(text: string, delta = false): EventMessage {
-  return eventMsg("assistant/chunk", { text, delta });
+// The real `assistant/chunk` payload wraps a StreamChunk: the text of one delta
+// lives at `data.chunk.text`, not `data.text`.
+function textDelta(text: string): EventMessage {
+  return eventMsg("assistant/chunk", {
+    turn: 1,
+    step: 1,
+    chunk: { type: "text-delta", index: 0, text },
+  });
 }
 
-function assistantMessage(text: string): EventMessage {
+function reasoningDelta(text: string): EventMessage {
+  return eventMsg("assistant/chunk", {
+    turn: 1,
+    step: 1,
+    chunk: { type: "reasoning-delta", index: 0, text },
+  });
+}
+
+function assistantMessage(...texts: string[]): EventMessage {
   return eventMsg("assistant/message", {
-    message: { role: "assistant", content: [{ type: "text", text }] },
+    turn: 1,
+    step: 1,
+    message: {
+      role: "assistant",
+      content: texts.map((text) => ({ type: "text", text })),
+    },
+  });
+}
+
+function userMessage(text: string, kind = "user"): EventMessage {
+  return eventMsg("user/message", {
+    id: "m1",
+    role: "user",
+    content: [{ type: "text", text }],
+    source: { kind },
   });
 }
 
@@ -83,16 +111,87 @@ describe("reduce", () => {
     expect(state.context).toEqual({ used: 50, window: 100 });
   });
 
-  it("appends assistant/chunk text to the stream", () => {
-    const s = reduce(initialState, textChunk("hel"));
-    const s2 = reduce(s, textChunk("lo"));
-    expect(s2.stream).toContain("hel");
-    expect(s2.stream).toContain("lo");
+  it("coalesces streamed deltas into one growing assistant entry", () => {
+    const first = reduce(initialState, textDelta("## Hel"));
+    const second = reduce(first, textDelta("lo"));
+    expect(second.transcript).toEqual([
+      { role: "assistant", text: "## Hello", streaming: true },
+    ]);
   });
 
-  it("appends assistant/message text to the stream", () => {
-    const s = reduce(initialState, assistantMessage("hi there"));
-    expect(s.stream).toContain("hi there");
+  it("ignores reasoning deltas and other chunk types", () => {
+    const streamed = reduce(initialState, textDelta("answer"));
+    const withReasoning = reduce(streamed, reasoningDelta("thinking"));
+    expect(withReasoning).toBe(streamed);
+    expect(
+      reduce(initialState, eventMsg("assistant/chunk", { chunk: { type: "usage" } })),
+    ).toBe(initialState);
+  });
+
+  it("finalizes the streamed entry from assistant/message instead of duplicating it", () => {
+    const streamed = reduce(initialState, textDelta("Hell"));
+    const done = reduce(streamed, assistantMessage("Hello"));
+    expect(done.transcript).toEqual([
+      { role: "assistant", text: "Hello", streaming: false },
+    ]);
+  });
+
+  it("keeps streamed text when the assembled message carries none", () => {
+    const streamed = reduce(initialState, textDelta("partial"));
+    const toolOnly = reduce(streamed, assistantMessage());
+    expect(toolOnly.transcript).toEqual([
+      { role: "assistant", text: "partial", streaming: false },
+    ]);
+  });
+
+  it("joins multiple text blocks of one assembled message", () => {
+    const s = reduce(initialState, assistantMessage("first", "second"));
+    expect(s.transcript[0]?.text).toBe("first\n\nsecond");
+  });
+
+  it("starts a new entry for each step of a multi-step turn", () => {
+    const step1 = reduce(reduce(initialState, textDelta("looking")), assistantMessage("looking"));
+    const step2 = reduce(reduce(step1, textDelta("done")), assistantMessage("done"));
+    expect(step2.transcript.map((entry) => entry.text)).toEqual([
+      "looking",
+      "done",
+    ]);
+  });
+
+  it("shows the person's own message and hides injected context messages", () => {
+    const typed = reduce(initialState, userMessage("hi there"));
+    expect(typed.transcript).toEqual([
+      { role: "user", text: "hi there", streaming: false },
+    ]);
+    for (const kind of ["plugin", "session-reference", "subagent-report"]) {
+      expect(reduce(typed, userMessage("injected", kind))).toBe(typed);
+    }
+  });
+
+  it("closes a dangling streamed entry when the next turn starts", () => {
+    const dangling = reduce(initialState, textDelta("cut off"));
+    const next = reduce(dangling, eventMsg("turn/start", { turn: 2 }));
+    expect(next.transcript).toEqual([
+      { role: "assistant", text: "cut off", streaming: false },
+    ]);
+  });
+
+  it("projects a resumed history into the same transcript", () => {
+    const resumed = reduce(initialState, {
+      kind: "history",
+      sessionId: "s1",
+      events: [
+        userMessage("ask").event,
+        userMessage("injected", "plugin").event,
+        textDelta("par").event,
+        textDelta("tial").event,
+        assistantMessage("partial answer").event,
+      ],
+    });
+    expect(resumed.transcript).toEqual([
+      { role: "user", text: "ask", streaming: false },
+      { role: "assistant", text: "partial answer", streaming: false },
+    ]);
   });
 
   it("sets approval from an ask message", () => {
@@ -169,37 +268,29 @@ describe("reduce", () => {
 
     const s = reduce(withDiffs, eventMsg("turn/start", {}));
     expect(s.diffs).toEqual([]);
-    expect(s.stream).toEqual(["previous turn"]);
+    expect(s.transcript).toEqual([
+      { role: "assistant", text: "previous turn", streaming: false },
+    ]);
     expect(s.status).toBe("thinking");
   });
 
-  it("replaces stream from resumed history", () => {
+  it("replaces the transcript from resumed history", () => {
     const state = reduce(reduce(initialState, assistantMessage("old")), {
       kind: "history",
       sessionId: "resumed",
-      events: [
-        {
-          type: "assistant/message",
-          seq: 1,
-          time: 1,
-          data: {
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "restored" }],
-            },
-          },
-        },
-      ],
+      events: [assistantMessage("restored").event],
     });
     expect(state.sessionId).toBe("resumed");
-    expect(state.stream).toEqual(["restored"]);
+    expect(state.transcript).toEqual([
+      { role: "assistant", text: "restored", streaming: false },
+    ]);
   });
 
   it("clears per-session state when the session changes", () => {
     const populated: UiState = {
       ...initialState,
       sessionId: "old",
-      stream: ["old"],
+      transcript: [{ role: "assistant", text: "old", streaming: false }],
       diffs: [{ path: "/x", oldText: "a", newText: "b" }],
       approval: { askId: "a", questions: [QUESTION] },
     };
@@ -209,7 +300,7 @@ describe("reduce", () => {
       cwd: "/tmp",
       createdAt: 1,
     });
-    expect(state.stream).toEqual([]);
+    expect(state.transcript).toEqual([]);
     expect(state.diffs).toEqual([]);
     expect(state.approval).toBeUndefined();
   });
@@ -240,7 +331,7 @@ describe("reduce", () => {
   });
 
   it("returns the same state object for unhandled messages (no-op)", () => {
-    const s = reduce(initialState, textChunk("x"));
+    const s = reduce(initialState, textDelta("x"));
     // `hello` is host-only and never forwarded to the webview by panel.ts, so it
     // is a genuine no-op here.
     const same = reduce(s, { kind: "hello", version: 1, dshVersion: "x", cwd: "/" });
