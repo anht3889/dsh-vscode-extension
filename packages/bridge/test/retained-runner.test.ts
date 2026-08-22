@@ -60,6 +60,14 @@ describe("createRunner (retained)", () => {
       expect(first.dshVersion).toBe("0.1.0");
       expect(first.cwd).toBe(process.cwd());
     }
+
+    const ready = messages.find((m) => m.kind === "ready");
+    expect(ready).toBeDefined();
+    if (ready?.kind === "ready") {
+      expect(ready.sessionId).toEqual(expect.any(String));
+      expect(ready.permissions.current).toBe("workspace-write");
+      expect(ready.models.current.model).toBe("mock-model");
+    }
   }, 60_000);
 
   it("submits twice through one agent, producing two distinct turn/end events", async () => {

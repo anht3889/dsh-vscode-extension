@@ -1,12 +1,94 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
-import { installModelSelection } from "@deepseek-ai/dsh-agent";
+import { installModelSelection, type ModelSelectionRef } from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
-import type { OutboundMessage, SessionEventWire } from "@dsh-vscode/contract";
+import type {
+  CatalogPayload,
+  ContextPayload,
+  ModelListItem,
+  ModelRef,
+  OutboundMessage,
+  PermissionsPayload,
+  SessionEventWire,
+} from "@dsh-vscode/contract";
 import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
+
+const PRESET_LABELS: Record<string, string> = {
+  "read-only": "Read Only",
+  "workspace-write": "Workspace Write",
+  "danger-full-access": "Full Access",
+};
+
+async function buildCatalog(ctx: Context, current: ModelRef): Promise<CatalogPayload> {
+  const llm = ctx.get("llm");
+  const models: ModelListItem[] = [];
+  if (llm !== undefined) {
+    for (const providerInfo of llm.listProviders()) {
+      const provider = providerInfo.id;
+      for (const info of await llm.listModels(provider)) {
+        try {
+          const resolved = await llm.resolveModelInfo(provider, info.id);
+          models.push({
+            provider,
+            model: info.id,
+            label: info.name ?? info.id,
+            ...(resolved.context?.contextWindow !== undefined
+              ? { contextWindow: resolved.context.contextWindow }
+              : {}),
+          });
+        } catch {
+          // Unusable model (credentials/config): omit.
+        }
+      }
+    }
+  }
+  if (!models.some((m) => m.provider === current.provider && m.model === current.model)) {
+    models.unshift({
+      provider: current.provider,
+      model: current.model,
+      label: current.model,
+    });
+  }
+  return { current, models };
+}
+
+function buildPermissions(ctx: Context, session: Session): PermissionsPayload {
+  const presetsSvc = ctx.get("permissionPresets");
+  const presets = presetsSvc !== undefined
+    ? presetsSvc.names.map((id: string) => ({
+        id,
+        label: PRESET_LABELS[id] ?? id,
+      }))
+    : [
+        { id: "read-only", label: "Read Only" },
+        { id: "workspace-write", label: "Workspace Write" },
+        { id: "danger-full-access", label: "Full Access" },
+      ];
+  const current =
+    presetsSvc !== undefined
+      ? presetsSvc.current(session.events)
+      : "workspace-write";
+  return { current, presets };
+}
+
+function buildContext(
+  ctx: Context,
+  session: Session,
+  window: number | undefined,
+): ContextPayload | undefined {
+  if (window === undefined || window <= 0) return undefined;
+  const meter = ctx.get("tokenMeter");
+  const used = meter !== undefined ? meter.measure(session).totalTokens : 0;
+  return { used, window };
+}
+
+/** Relay a non-fatal `status:error` for session commands not yet implemented. */
+function unavailable(feature: string, io: Io): void {
+  io.send({ kind: "status", state: "error", detail: `${feature} is not available yet` });
+}
 
 /**
  * Re-serialize one typed {@link SessionEvent} into the dependency-free wire
@@ -100,8 +182,8 @@ export interface SubmitOptions {
 
 /**
  * Full session command surface the bridge dispatcher routes inbound protocol
- * messages onto. {@link createRunner} implements only submit/cancel until Task 3
- * wires the remaining session lifecycle commands.
+ * messages onto. Lifecycle commands beyond submit/cancel emit `status:error`
+ * placeholders until Tasks 4/5 wire them.
  */
 export interface SessionController {
   submit(text: string, opts?: SubmitOptions): void;
@@ -114,21 +196,16 @@ export interface SessionController {
 }
 
 /**
- * Live runner surface returned by {@link createRunner} today: submit/cancel only.
- * Task 3 expands the implementation to the full {@link SessionController}.
- */
-export type RetainedRunner = Pick<SessionController, "submit" | "cancel">;
-
-/**
  * Create a retained runner: mount the boot recipe once, register the
  * `session/event` relay once (before `agents.create` so no event is missed),
- * and return a handler that drives repeated turns on the SAME agent/session.
+ * emit `hello`/`session`/`ready`, and return a {@link SessionController} that
+ * drives repeated turns on the SAME agent/session.
  *
  * Unlike the one-shot {@link runVscode}, this never exits the process and never
  * re-registers the listener per submit — submit is plain `followup`, and the
  * idle/flush tail is chained (and serialized) behind each turn.
  */
-export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner> {
+export async function createRunner(ctx: Context, io: Io): Promise<SessionController> {
   await ctx.get("loader")?.await();
 
   const agents = ctx.get("agents");
@@ -139,6 +216,10 @@ export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner
   }
 
   const selection = defaultModel.currentSelection();
+  const selectionRef: ModelSelectionRef = {
+    current: selection,
+    assembled: undefined,
+  };
 
   // Version handshake FIRST: the extension records `hello` (host-only, never
   // forwarded to the webview) to learn PROTOCOL_VERSION / dshVersion / cwd /
@@ -172,11 +253,32 @@ export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner
       model: selection.model,
     },
     setup: (agentCtx) => {
-      installModelSelection(agentCtx, {
-        current: selection,
-        assembled: undefined,
-      });
+      installModelSelection(agentCtx, selectionRef);
     },
+  });
+
+  const catalog = await buildCatalog(ctx, {
+    provider: selection.provider,
+    model: selection.model,
+  });
+  const permissions = buildPermissions(ctx, agent.session);
+  const window = catalog.models.find(
+    (m) => m.provider === catalog.current.provider && m.model === catalog.current.model,
+  )?.contextWindow;
+  const context = buildContext(ctx, agent.session, window);
+  io.send({
+    kind: "session",
+    sessionId: agent.session.id,
+    cwd: process.cwd(),
+    createdAt: Date.now(),
+  });
+  io.send({
+    kind: "ready",
+    sessionId: agent.session.id,
+    cwd: process.cwd(),
+    models: catalog,
+    permissions,
+    ...(context !== undefined ? { context } : {}),
   });
 
   // Serialize turn tails: each submit appends to this chain so the prior turn's
@@ -184,7 +286,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner
   // resolves the agent's initial idle state.
   let tail: Promise<void> = agent.whenIdle();
 
-  const submit = (text: string): void => {
+  const submit = (text: string, _opts?: SubmitOptions): void => {
     const turn: Promise<void> = tail
       .then(() => {
         agent.followup(
@@ -212,6 +314,14 @@ export async function createRunner(ctx: Context, io: Io): Promise<RetainedRunner
     agent.cancel({ kind: "user" });
   };
 
-  return { submit, cancel };
+  return {
+    submit,
+    cancel,
+    listSessions: () => unavailable("listSessions", io),
+    newSession: () => unavailable("newSession", io),
+    resume: (_sessionId: string) => unavailable("resume", io),
+    selectModel: (_provider: string, _model: string) => unavailable("selectModel", io),
+    selectPermission: (_preset: string) => unavailable("selectPermission", io),
+  };
 }
 
