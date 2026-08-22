@@ -59,6 +59,12 @@
           "type": "string",
           "default": "",
           "description": "Path to the dsh binary (empty = use PATH)."
+        },
+        "dsh.handshakeTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 1000,
+          "description": "How long to wait for dsh to report itself ready before giving up. Raise this if chat reports 'no handshake' on a slow or heavily loaded machine."
         }
       }
     }

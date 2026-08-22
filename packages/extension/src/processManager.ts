@@ -10,8 +10,14 @@ export interface ProcessManagerOptions {
   onExit?(folder: string, code: number | null, signal: NodeJS.Signals | null): void;
   /** Optional notification when a child fails to spawn (e.g. ENOENT on the binary). */
   onError?(folder: string, error: Error): void;
-  /** Maximum ms to wait for the first stdout line (handshake). Default 5000. */
-  handshakeTimeoutMs?: number;
+  /**
+   * Maximum ms to wait for the first stdout line (the `hello` handshake).
+   * Resolved per start, like `resolveBinary`, so a settings change applies
+   * without reloading the window. The caller owns the value: `dsh` boots a full
+   * plugin tree, and several editor windows starting at once push that well past
+   * any window short enough to feel responsive on an idle machine.
+   */
+  resolveHandshakeTimeoutMs(): number;
 }
 
 interface RunningProcess {
@@ -72,7 +78,7 @@ export class ProcessManager {
     // readline, avoiding a race with a separate readline on the same stream).
     // A spawn ENOENT, profile-not-found crash, or silent no-op boot all reject
     // the Promise — which the caller surfaces as a visible error.
-    const handshakeMs = this.options.handshakeTimeoutMs ?? 5000;
+    const handshakeMs = this.options.resolveHandshakeTimeoutMs();
     let unsubscribe = (): void => {};
     const ready = new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -110,7 +116,10 @@ export class ProcessManager {
       setTimeout(() => {
         if (settled) return;
         settled = true;
-        const err = new Error(`no handshake from ${binary} after ${handshakeMs}ms`);
+        const err = new Error(
+          `${binary} did not report itself ready within ${handshakeMs}ms. ` +
+            `Run "DSH: Start" to retry, or raise dsh.handshakeTimeoutMs.`,
+        );
         this.options.onError?.(folder, err);
         child.kill("SIGTERM");
         reject(err);

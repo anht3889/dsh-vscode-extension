@@ -11,6 +11,7 @@ function makeIo(): { io: Io; sent: OutboundMessage[] } {
       sent.push(msg);
     },
     onCommand() {},
+    onDisconnect() {},
     close() {},
   };
   return { io, sent };

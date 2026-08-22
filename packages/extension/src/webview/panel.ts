@@ -269,6 +269,11 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     // allow the webview resource origin in addition to the nonce ('nonce' alone
     // only authorises inline scripts). Allow images/fonts/connections to the same
     // origin (plus data: images). default-src 'none' keeps everything else locked.
+    //
+    // `#root` ships with static placeholder text that React replaces on mount, and
+    // the inline listener reports load and evaluation failures into the same node.
+    // A host that cannot run or fetch the bundle therefore shows a reason rather
+    // than an empty panel, which is indistinguishable from a hung agent.
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -281,7 +286,20 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${styleUri}" />
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root"><p class="dsh-boot">Loading DSH\u2026</p></div>
+  <script nonce="${nonce}">
+    // Capture phase: resource load failures fire on the element and do not bubble.
+    window.addEventListener("error", function (event) {
+      var root = document.getElementById("root");
+      if (root === null) return;
+      var target = event.target;
+      var detail =
+        target && target.tagName === "SCRIPT"
+          ? "could not load " + (target.src || "the webview bundle")
+          : event.message || String(event.error || "unknown error");
+      root.textContent = "DSH webview failed to start: " + detail;
+    }, true);
+  </script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

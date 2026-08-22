@@ -16,6 +16,7 @@ function capture(messages: OutboundMessage[]): Io {
       messages.push(msg);
     },
     onCommand() {},
+    onDisconnect() {},
     close() {},
   };
 }

@@ -33,6 +33,32 @@ describe("createStdio", () => {
     expect((got[0] as any).kind).toBe("submit");
     expect((got[0] as any).task).toBe("hi");
   });
+  it("reports disconnect once when stdin ends, and to late subscribers", async () => {
+    const stdin = new PassThrough();
+    stdin.setEncoding("utf8");
+    const io = createStdio({ stdin } as any);
+    let early = 0;
+    io.onDisconnect(() => { early += 1; });
+    stdin.end();
+    await new Promise((r) => setImmediate(r));
+    expect(early).toBe(1);
+
+    // `close` follows `end` on a destroyed stream; the transition stays terminal.
+    let late = 0;
+    io.onDisconnect(() => { late += 1; });
+    expect(late).toBe(1);
+    expect(early).toBe(1);
+  });
+  it("reports disconnect when stdin errors", async () => {
+    const stdin = new PassThrough();
+    stdin.setEncoding("utf8");
+    const io = createStdio({ stdin } as any);
+    let seen = 0;
+    io.onDisconnect(() => { seen += 1; });
+    stdin.emit("error", new Error("EPIPE"));
+    await new Promise((r) => setImmediate(r));
+    expect(seen).toBe(1);
+  });
   it("ignores non-inbound JSON and malformed lines", async () => {
     const stdin = new PassThrough();
     stdin.setEncoding("utf8");

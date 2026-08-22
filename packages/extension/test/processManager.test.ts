@@ -22,6 +22,7 @@ function makeManager() {
   return new ProcessManager({
     resolveBinary: () => "node",
     argsFor: () => [fakeDsh],
+    resolveHandshakeTimeoutMs: () => 5000,
   });
 }
 
@@ -82,6 +83,7 @@ describe("ProcessManager", () => {
     const pm = new ProcessManager({
       resolveBinary: () => "node",
       argsFor: () => [fakeDsh],
+      resolveHandshakeTimeoutMs: () => 5000,
       onStderr: (t) => received.push(t),
     });
     const folder = tmpFolder();

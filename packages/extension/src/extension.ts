@@ -40,12 +40,21 @@ function resolveDsh(): string {
   return "dsh";
 }
 
+/** The activation's process manager, kept for `deactivate()` to shut its
+ *  children down. Undefined outside an activated extension host. */
+let managed: ProcessManager | undefined;
+
 export function activate(context: vscode.ExtensionContext): void {
   const pm = new ProcessManager({
     resolveBinary: resolveDsh,
     argsFor: () => ["--profile", "vscode"],
+    resolveHandshakeTimeoutMs: () =>
+      vscode.workspace
+        .getConfiguration("dsh")
+        .get<number>("handshakeTimeoutMs", 30_000),
     onStderr: (t) => console.error("[dsh]", t.trimEnd()),
   });
+  managed = pm;
   const provider = new DshChatProvider(context.extensionUri, pm);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("dsh.chat", provider, {
@@ -56,12 +65,18 @@ export function activate(context: vscode.ExtensionContext): void {
     new vscode.Disposable(() => provider.dispose()),
   );
 
-  // Auto-start DSH when a workspace folder is open, so the user doesn't have to
-  // run the command manually every session. Fire-and-forget: activate() is sync,
-  // and startActiveFolder() handles its own errors (posts them to the webview).
-  if (vscode.workspace.workspaceFolders?.[0]) {
-    void provider.startActiveFolder();
-  }
+  // DSH starts when the chat view is first shown (the webview announces itself
+  // and the provider starts the child), not here. Starting at activation spawned
+  // a full runtime in every window whose sidebar restored this view — they then
+  // contended for the same machine — and any startup error was posted before a
+  // webview existed to display it.
 }
 
-export function deactivate(): void {}
+/** Terminate every `dsh` child before the extension host goes away. VS Code
+ *  awaits the returned promise, so this is the last chance to avoid leaving a
+ *  full DSH runtime running with no editor attached. */
+export async function deactivate(): Promise<void> {
+  const pm = managed;
+  managed = undefined;
+  await pm?.stopAll();
+}

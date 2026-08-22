@@ -19,6 +19,15 @@ body,
   color: var(--dsh-fg);
 }
 
+/* Pre-mount placeholder and webview boot-failure text, replaced by React on
+   mount. Readable unstyled too, since a failed stylesheet must not hide it. */
+.dsh-boot {
+  margin: 0;
+  padding: 12px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 .dsh-root {
   display: flex;
   flex-direction: column;

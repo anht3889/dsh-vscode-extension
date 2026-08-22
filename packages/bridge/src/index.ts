@@ -37,6 +37,10 @@ export function apply(ctx: Context, _config: unknown): void {
   const provider = createUserQuestionProvider(io);
   ctx.userQuestions.registerProvider(provider);
 
+  // The editor closing stdin is the only signal that its extension host is gone.
+  // Without it the process outlives every editor that ever spawned it.
+  io.onDisconnect(() => requestExit(ctx, 0));
+
   createRunner(ctx, io)
     .then((runner) => {
       io.onCommand((msg) => dispatchCommand(ctx, msg, { runner, provider }));
@@ -44,7 +48,13 @@ export function apply(ctx: Context, _config: unknown): void {
     .catch((e: unknown) => {
       const detail = e instanceof Error ? e.message : String(e);
       io.send({ kind: "status", state: "error", detail });
-      const exit = ctx.get("appExit") as ((code: number) => void) | undefined;
-      if (exit !== undefined) exit(1);
+      requestExit(ctx, 1);
     });
+}
+
+/** Request process exit through the launcher, tolerating its absence so unit
+ *  tests that mount without one do not hard-exit the test runner. */
+function requestExit(ctx: Context, code: number): void {
+  const exit = ctx.get("appExit") as ((code: number) => void) | undefined;
+  if (exit !== undefined) exit(code);
 }
