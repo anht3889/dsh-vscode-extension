@@ -12,6 +12,7 @@ import type {
   SessionEvent,
   SessionHeader,
 } from "@deepseek-ai/dsh-session";
+import type { SessionPersistence } from "@deepseek-ai/dsh-session-persistence";
 import type {
   CatalogPayload,
   ContextPayload,
@@ -148,6 +149,10 @@ function sessionListItem(
   };
 }
 
+function getSessionPersistence(ctx: Context): SessionPersistence | undefined {
+  return ctx.get("sessionPersistence");
+}
+
 /**
  * Re-serialize one typed {@link SessionEvent} into the dependency-free wire
  * shape the extension renders. `type`/`seq`/`time` map one-to-one and `data`
@@ -275,13 +280,6 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const selection = defaultModel.currentSelection();
   type LiveSelectionRef = ModelSelectionRef & { current: ModelRef };
-  interface SessionPersistenceReader {
-    list(): Promise<readonly SessionHeader[]>;
-    inspect(id: SessionId): Promise<{
-      readonly meta: SessionHeader;
-      readonly events: readonly SessionEvent[];
-    }>;
-  }
 
   const initialSelectionRef: LiveSelectionRef = {
     current: selection,
@@ -386,11 +384,19 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     };
     try {
       previous.handle.agent.cancel({ kind: "user" });
+      await previous.handle.agent.whenIdle();
       await sessions.flush(previous.handle.agent.session);
-      await previous.handle.dispose();
     } catch (error) {
       await sessions.flush(next.handle.agent.session);
       await next.handle.dispose();
+      throw error;
+    }
+    try {
+      await previous.handle.dispose();
+    } catch (error) {
+      live = next;
+      await next.handle.agent.whenIdle();
+      await emitLiveSession(next, true);
       throw error;
     }
     live = next;
@@ -427,11 +433,8 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const listSessions = (): void => {
     void (async () => {
-      const persistence = ctx.get(
-        "sessionPersistence",
-      ) as SessionPersistenceReader | undefined;
       const current = live.handle.agent.session;
-      if (persistence === undefined) {
+      const fallback = (): void => {
         io.send({
           kind: "sessions",
           available: false,
@@ -444,12 +447,22 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
             ),
           ],
         });
+      };
+      const persistence = getSessionPersistence(ctx);
+      if (persistence === undefined) {
+        fallback();
         return;
       }
 
-      const headers = (await persistence.list()).filter(
-        (header) => header.cwd === process.cwd(),
-      );
+      let headers: SessionHeader[];
+      try {
+        headers = (await persistence.list()).filter(
+          (header) => header.cwd === process.cwd(),
+        );
+      } catch {
+        fallback();
+        return;
+      }
       const items = await Promise.all(
         headers.map(async (header): Promise<SessionListItem> => {
           if (header.id === current.id) {
@@ -498,8 +511,8 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const newSession = (): void => {
     queue(async () => {
-      await replaceLive((selectionRef) =>
-        agents.create({
+      await replaceLive(async (selectionRef) => {
+        const handle = await agents.create({
           sessionId: SessionId(`session-${randomUUID()}`),
           meta: { cwd: process.cwd() },
           agentOptions: {
@@ -509,16 +522,27 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
           setup: (agentCtx) => {
             installModelSelection(agentCtx, selectionRef);
           },
-        }),
-      );
+        });
+        const permissionPresets = ctx.get("permissionPresets");
+        if (
+          permissionPresets !== undefined &&
+          permissionPresets.current(handle.agent.session.events) !==
+            "workspace-write"
+        ) {
+          permissionPresets.set(handle.agent.session, "workspace-write");
+        }
+        return handle;
+      });
     });
   };
 
   const resume = (sessionId: string): void => {
     queue(async () => {
-      const persistence = ctx.get(
-        "sessionPersistence",
-      ) as SessionPersistenceReader | undefined;
+      if (sessionId === live.handle.agent.session.id) {
+        await emitLiveSession(live, true);
+        return;
+      }
+      const persistence = getSessionPersistence(ctx);
       if (persistence === undefined) {
         throw new Error(`cannot resume ${sessionId} (durable history unavailable)`);
       }
