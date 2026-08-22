@@ -105,6 +105,65 @@ describe("session controller", () => {
     }
   });
 
+  it("lists multiple workspace sessions and excludes a foreign cwd", async () => {
+    const originalCwd = process.cwd();
+    const foreignCwd = await mkdtemp(join(tmpdir(), "dsh-vscode-foreign-"));
+    const foreignMessages: OutboundMessage[] = [];
+    try {
+      process.chdir(foreignCwd);
+      const foreign = await createRunner(
+        await boot(),
+        capture(foreignMessages),
+      );
+      foreign.submit("foreign chat");
+      await waitFor(
+        () =>
+          foreignMessages.some(
+            (message) => message.kind === "status" && message.state === "idle",
+          ),
+        60_000,
+      );
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+    runner.submit("first local chat");
+    await waitFor(
+      () =>
+        messages.some(
+          (message) => message.kind === "status" && message.state === "idle",
+        ),
+      60_000,
+    );
+    runner.newSession();
+    await waitFor(
+      () => messages.filter((message) => message.kind === "session").length >= 2,
+    );
+    runner.submit("second local chat");
+    await waitFor(
+      () =>
+        messages.filter(
+          (message) => message.kind === "status" && message.state === "idle",
+        ).length >= 2,
+      60_000,
+    );
+    runner.listSessions();
+
+    await waitFor(() => messages.some((message) => message.kind === "sessions"));
+    const list = messages.filter((message) => message.kind === "sessions").at(-1);
+    expect(list?.kind).toBe("sessions");
+    if (list?.kind === "sessions") {
+      expect(list.items).toHaveLength(2);
+      expect(list.items.every((item) => item.cwd === originalCwd)).toBe(true);
+      expect(list.items.map((item) => item.title)).toEqual(
+        expect.arrayContaining(["first local chat", "second local chat"]),
+      );
+    }
+    await rm(foreignCwd, { recursive: true, force: true });
+  }, 120_000);
+
   it("falls back to the live session when durable history is unavailable", async () => {
     const messages: OutboundMessage[] = [];
     const runner = await createRunner(
@@ -426,7 +485,11 @@ describe("session controller", () => {
         (message) => message.kind === "status" && message.state === "error",
       ),
     );
-    expect(messages.some((message) => message.kind === "catalog")).toBe(false);
+    const catalog = messages.filter((message) => message.kind === "catalog").at(-1);
+    expect(catalog?.kind === "catalog" ? catalog.current : undefined).toEqual({
+      provider: "deepseek-official",
+      model: "mock-model",
+    });
 
     runner.submit("still uses the configured model");
     await waitFor(
@@ -460,6 +523,30 @@ describe("session controller", () => {
       "workspace-write",
     );
   });
+
+  it("keeps the user turn when submit picker preflight fails", async () => {
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+
+    runner.submit("do not drop this", {
+      provider: "missing-provider",
+      model: "missing-model",
+    });
+
+    await waitFor(
+      () =>
+        messages.some(
+          (message) =>
+            message.kind === "event" && message.event.type === "turn/end",
+        ),
+      60_000,
+    );
+    expect(
+      messages.some(
+        (message) => message.kind === "status" && message.state === "error",
+      ),
+    ).toBe(true);
+  }, 120_000);
 
   it("emits next-request context after a completed turn", async () => {
     const messages: OutboundMessage[] = [];

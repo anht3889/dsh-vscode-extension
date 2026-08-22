@@ -55,6 +55,11 @@ body,
   gap: 3px;
 }
 
+.dsh-recent-owner {
+  position: relative;
+  display: flex;
+}
+
 .dsh-icon-button,
 .dsh-composer-send {
   display: inline-flex;
@@ -98,7 +103,7 @@ body,
 .dsh-recent-popover {
   position: absolute;
   top: calc(100% + 4px);
-  right: 8px;
+  right: 0;
   width: min(300px, calc(100vw - 16px));
   padding: 8px;
   border: 1px solid var(--dsh-border);
@@ -256,6 +261,13 @@ body,
   stroke-width: 1.4;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.dsh-stop-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
 }
 
 .dsh-composer-send:disabled {

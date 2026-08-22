@@ -43,7 +43,8 @@ export function RecentPopover({
       <div className="dsh-recent-list">
         {unavailable ? (
           <div className="dsh-empty-state">Session history unavailable</div>
-        ) : filtered.length === 0 ? (
+        ) : null}
+        {filtered.length === 0 && !unavailable ? (
           <div className="dsh-empty-state">No recent chats</div>
         ) : (
           filtered.map((item) => (

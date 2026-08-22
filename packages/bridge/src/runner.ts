@@ -13,6 +13,7 @@ import type {
   SessionHeader,
 } from "@deepseek-ai/dsh-session";
 import type { SessionPersistence } from "@deepseek-ai/dsh-session-persistence";
+import type {} from "@deepseek-ai/dsh-session-query";
 import type {
   CatalogPayload,
   ContextPayload,
@@ -320,6 +321,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   interface LiveSession {
     handle: AgentHandle;
     selectionRef: LiveSelectionRef;
+    catalog?: CatalogPayload;
   }
 
   let live: LiveSession = {
@@ -333,6 +335,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   ): Promise<void> => {
     const { session } = current.handle.agent;
     const catalog = await buildCatalog(ctx, current.selectionRef.current);
+    current.catalog = catalog;
     const permissions = buildPermissions(ctx, session);
     const window = catalog.models.find(
       (model) =>
@@ -416,7 +419,9 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const emitContext = async (): Promise<void> => {
-    const catalog = await buildCatalog(ctx, live.selectionRef.current);
+    const catalog =
+      live.catalog ?? (await buildCatalog(ctx, live.selectionRef.current));
+    live.catalog = catalog;
     const window = catalog.models.find(
       (model) =>
         model.provider === catalog.current.provider &&
@@ -437,7 +442,11 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       model: resolved.model,
     };
     const catalog = await buildCatalog(ctx, selected);
-    live.selectionRef.current = selected;
+    live.selectionRef.current = {
+      ...live.selectionRef.current,
+      ...selected,
+    };
+    live.catalog = catalog;
     io.send({ kind: "catalog", ...catalog });
     await emitContext();
   };
@@ -465,14 +474,39 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const submit = (text: string, opts: SubmitOptions = {}): void => {
     queue(async () => {
-      if (opts.permission !== undefined) {
-        applyPermission(opts.permission);
+      if (
+        opts.permission !== undefined &&
+        buildPermissions(ctx, live.handle.agent.session).current !==
+          opts.permission
+      ) {
+        try {
+          applyPermission(opts.permission);
+        } catch (error) {
+          sendError(error);
+          io.send({
+            kind: "permissions",
+            ...buildPermissions(ctx, live.handle.agent.session),
+          });
+        }
       }
       if (opts.provider !== undefined || opts.model !== undefined) {
         if (opts.provider === undefined || opts.model === undefined) {
-          throw new Error("submit model selection requires provider and model");
+          sendError(new Error("submit model selection requires provider and model"));
+        } else if (
+          opts.provider !== live.selectionRef.current.provider ||
+          opts.model !== live.selectionRef.current.model
+        ) {
+          try {
+            await applyModel(opts.provider, opts.model);
+          } catch (error) {
+            sendError(error);
+            const catalog =
+              live.catalog ??
+              (await buildCatalog(ctx, live.selectionRef.current));
+            live.catalog = catalog;
+            io.send({ kind: "catalog", ...catalog });
+          }
         }
-        await applyModel(opts.provider, opts.model);
       }
       const current = live;
       current.handle.agent.followup(
@@ -495,20 +529,58 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   const listSessions = (): void => {
     void (async () => {
       const current = live.handle.agent.session;
+      const cwd = process.cwd();
+      const liveItem = sessionListItem(
+        current.id,
+        current.header.createdAt,
+        current.header.cwd ?? cwd,
+        current.events,
+      );
+      const sendItems = (items: SessionListItem[]): void => {
+        if (!items.some((item) => item.sessionId === current.id)) {
+          items.push(liveItem);
+        }
+        items.sort((left, right) => right.updatedAt - left.updatedAt);
+        io.send({ kind: "sessions", available: true, items });
+      };
       const fallback = (): void => {
         io.send({
           kind: "sessions",
           available: false,
-          items: [
-            sessionListItem(
-              current.id,
-              current.header.createdAt,
-              current.header.cwd ?? process.cwd(),
-              current.events,
-            ),
-          ],
+          items: [liveItem],
         });
       };
+      const query = ctx.get("sessionQuery");
+      if (query !== undefined) {
+        try {
+          const records = await query.filterSessions([
+            { kind: "cwd", values: [cwd] },
+          ]);
+          const titles = await query.readTitleSnapshots(
+            records.map((record) => record.header.id),
+          );
+          sendItems(
+            records.map((record, index) => {
+              if (record.header.id === current.id) return liveItem;
+              const titleResult = titles[index];
+              const title =
+                titleResult?.status === "fulfilled"
+                  ? titleResult.value.title
+                  : undefined;
+              return {
+                sessionId: record.header.id,
+                title: title?.title ?? record.header.id,
+                createdAt: record.header.createdAt,
+                updatedAt: title?.updatedAt ?? record.header.createdAt,
+                cwd: record.header.cwd ?? cwd,
+              };
+            }),
+          );
+          return;
+        } catch {
+          // The optional query projection may be unavailable; persistence remains authoritative.
+        }
+      }
       const persistence = getSessionPersistence(ctx);
       if (persistence === undefined) {
         fallback();
@@ -518,53 +590,41 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       let headers: SessionHeader[];
       try {
         headers = (await persistence.list()).filter(
-          (header) => header.cwd === process.cwd(),
+          (header) => header.cwd === cwd,
         );
       } catch {
+        // A failed durable list still leaves the current live chat usable.
         fallback();
         return;
       }
-      const items = await Promise.all(
-        headers.map(async (header): Promise<SessionListItem> => {
-          if (header.id === current.id) {
-            return sessionListItem(
-              current.id,
-              current.header.createdAt,
-              current.header.cwd ?? process.cwd(),
-              current.events,
-            );
-          }
-          try {
-            const inspection = await persistence.inspect(header.id);
-            return sessionListItem(
+      const items: SessionListItem[] = [];
+      for (const header of headers) {
+        if (header.id === current.id) {
+          items.push(liveItem);
+          continue;
+        }
+        try {
+          const inspection = await persistence.inspect(header.id);
+          items.push(
+            sessionListItem(
               header.id,
               header.createdAt,
-              header.cwd ?? process.cwd(),
+              header.cwd ?? cwd,
               inspection.events,
-            );
-          } catch {
-            return {
-              sessionId: header.id,
-              title: header.id,
-              createdAt: header.createdAt,
-              updatedAt: header.createdAt,
-              cwd: header.cwd ?? process.cwd(),
-            };
-          }
-        }),
-      );
-      if (!items.some((item) => item.sessionId === current.id)) {
-        items.push(
-          sessionListItem(
-            current.id,
-            current.header.createdAt,
-            current.header.cwd ?? process.cwd(),
-            current.events,
-          ),
-        );
+            ),
+          );
+        } catch {
+          // A malformed individual log keeps an identity-only recent row.
+          items.push({
+            sessionId: header.id,
+            title: header.id,
+            createdAt: header.createdAt,
+            updatedAt: header.createdAt,
+            cwd: header.cwd ?? cwd,
+          });
+        }
       }
-      items.sort((left, right) => right.updatedAt - left.updatedAt);
-      io.send({ kind: "sessions", available: true, items });
+      sendItems(items);
     })().catch((error: unknown) => {
       io.send({ kind: "status", state: "error", detail: String(error) });
     });
@@ -640,6 +700,10 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
         await applyModel(provider, model);
       } catch (error) {
         sendError(error);
+        const catalog =
+          live.catalog ?? (await buildCatalog(ctx, live.selectionRef.current));
+        live.catalog = catalog;
+        io.send({ kind: "catalog", ...catalog });
       }
     });
   };

@@ -197,6 +197,23 @@ describe("reduce", () => {
     expect(s.ready).toBe(false);
   });
 
+  it("keeps a ready composer usable after a nonfatal bridge error", () => {
+    const readyState: UiState = { ...initialState, starting: false, ready: true };
+    expect(reduce(readyState, statusMsg("error", "unknown model")).ready).toBe(
+      true,
+    );
+  });
+
+  it("disables the composer when the retained child disconnects", () => {
+    const readyState: UiState = { ...initialState, starting: false, ready: true };
+    const state = reduce(readyState, {
+      kind: "hostDisconnected",
+      detail: "dsh exited",
+    });
+    expect(state.ready).toBe(false);
+    expect(state.error).toBe("dsh exited");
+  });
+
   it("clears the error on status:idle", () => {
     const errored = reduce(initialState, statusMsg("error", "boom"));
     expect(errored.error).toBe("boom");

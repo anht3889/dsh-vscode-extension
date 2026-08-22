@@ -56,6 +56,15 @@ export const initialState: UiState = {
   context: undefined,
 };
 
+/** Host-only lifecycle message sent when the retained DSH child exits. */
+export interface HostDisconnectedMessage {
+  kind: "hostDisconnected";
+  detail: string;
+}
+
+/** Messages accepted by the webview reducer. */
+export type UiMessage = OutboundMessage | HostDisconnectedMessage;
+
 /**
  * Extract assistant text from an event's verbatim `data` record, tolerant of the
  * two shapes the bridge forwards: `assistant/chunk` ({text, delta?}) and
@@ -133,8 +142,17 @@ export function contextPercent(
  * Fold one outbound message into the UI state. Pure: returns a new object when
  * the message is handled, the same object (reference-equal) when it is not.
  */
-export function reduce(state: UiState, msg: OutboundMessage): UiState {
+export function reduce(state: UiState, msg: UiMessage): UiState {
   switch (msg.kind) {
+    case "hostDisconnected":
+      return {
+        ...state,
+        starting: false,
+        ready: false,
+        status: "error",
+        error: msg.detail,
+      };
+
     case "ask":
       return {
         ...state,

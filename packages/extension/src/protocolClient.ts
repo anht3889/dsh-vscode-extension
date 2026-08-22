@@ -13,6 +13,7 @@ export class ProtocolClient {
   /** Messages that arrived before any listener subscribed — replayed on subscribe
    *  so late listeners (e.g. a handshake-then-test pattern) never miss events. */
   private readonly history: OutboundMessage[] = [];
+  private buffering = true;
 
   constructor(child: ChildIo) {
     this.child = child;
@@ -27,7 +28,7 @@ export class ProtocolClient {
         return;
       }
       if (isOutboundMessage(m)) {
-        this.history.push(m);
+        if (this.buffering) this.history.push(m);
         for (const cb of this.listeners) cb(m);
       }
     });
@@ -37,10 +38,18 @@ export class ProtocolClient {
     this.child.stdin.write(JSON.stringify(cmd) + "\n");
   }
 
-  onMessage(cb: (m: OutboundMessage) => void): void {
+  onMessage(
+    cb: (m: OutboundMessage) => void,
+    options: { consumeHistory?: boolean } = {},
+  ): () => void {
     // Replay every message that arrived before this listener subscribed.
     for (const m of this.history) cb(m);
+    if (options.consumeHistory !== false) {
+      this.history.length = 0;
+      this.buffering = false;
+    }
     this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
   }
 
   close(): void {

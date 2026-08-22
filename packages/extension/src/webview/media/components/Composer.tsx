@@ -11,15 +11,12 @@ interface ComposerProps {
   models: CatalogPayload | undefined;
   permissions: PermissionsPayload | undefined;
   context: ContextPayload | undefined;
-  sessionId: string | undefined;
-  fullAccessConfirmedFor: string | undefined;
-  onSubmit(
-    text: string,
-    options: { provider?: string; model?: string; permission?: string },
-  ): void;
+  status: "idle" | "thinking" | "awaiting-approval" | "error";
+  onSubmit(text: string): void;
+  onCancel(): void;
   onSelectModel(provider: string, model: string): void;
   onSelectPermission(preset: string): void;
-  onConfirmFullAccess(): void;
+  onRequestFullAccess(): void;
 }
 
 const MODEL_SEPARATOR = "\u0000";
@@ -29,31 +26,21 @@ export function Composer({
   models,
   permissions,
   context,
-  sessionId,
-  fullAccessConfirmedFor,
+  status,
   onSubmit,
+  onCancel,
   onSelectModel,
   onSelectPermission,
-  onConfirmFullAccess,
+  onRequestFullAccess,
 }: ComposerProps): JSX.Element {
   const [text, setText] = useState("");
 
   const send = useCallback((): void => {
     const t = text.trim();
     if (!ready || t.length === 0) return;
-    onSubmit(t, {
-      ...(models?.current.provider !== undefined
-        ? { provider: models.current.provider }
-        : {}),
-      ...(models?.current.model !== undefined
-        ? { model: models.current.model }
-        : {}),
-      ...(permissions?.current !== undefined
-        ? { permission: permissions.current }
-        : {}),
-    });
+    onSubmit(t);
     setText("");
-  }, [models, onSubmit, permissions, ready, text]);
+  }, [onSubmit, ready, text]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -67,24 +54,13 @@ export function Composer({
 
   const selectPermission = useCallback(
     (preset: string): void => {
-      if (
-        preset === "danger-full-access" &&
-        fullAccessConfirmedFor !== sessionId
-      ) {
-        const confirmed = window.confirm(
-          "Full Access disables sandbox confinement and approval prompts for this chat. Continue?",
-        );
-        if (!confirmed) return;
-        onConfirmFullAccess();
+      if (preset === "danger-full-access") {
+        onRequestFullAccess();
+        return;
       }
       onSelectPermission(preset);
     },
-    [
-      fullAccessConfirmedFor,
-      onConfirmFullAccess,
-      onSelectPermission,
-      sessionId,
-    ],
+    [onRequestFullAccess, onSelectPermission],
   );
 
   const percent = contextPercent(context);
@@ -168,19 +144,25 @@ export function Composer({
           <button
             className="dsh-composer-send"
             type="button"
-            title="Send"
-            aria-label="Send message"
-            onClick={send}
-            disabled={!ready || text.trim().length === 0}
+            title={status === "thinking" ? "Stop" : "Send"}
+            aria-label={status === "thinking" ? "Stop response" : "Send message"}
+            onClick={status === "thinking" ? onCancel : send}
+            disabled={
+              status !== "thinking" && (!ready || text.trim().length === 0)
+            }
           >
-            <svg
-              viewBox="0 0 16 16"
-              width="16"
-              height="16"
-              aria-hidden="true"
-            >
-              <path d="M2 8.2 13.5 2.5 9.4 13.7 7.3 8.8 2 8.2Zm5.3.6 6.2-6.3" />
-            </svg>
+            {status === "thinking" ? (
+              <span className="dsh-stop-icon" aria-hidden="true" />
+            ) : (
+              <svg
+                viewBox="0 0 16 16"
+                width="16"
+                height="16"
+                aria-hidden="true"
+              >
+                <path d="M2 8.2 13.5 2.5 9.4 13.7 7.3 8.8 2 8.2Zm5.3.6 6.2-6.3" />
+              </svg>
+            )}
           </button>
         </div>
       </div>

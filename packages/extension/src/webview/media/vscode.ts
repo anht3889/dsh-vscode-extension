@@ -8,7 +8,9 @@ import type { InboundMessage, OutboundMessage } from "@dsh-vscode/contract";
 export type UiCommandCmd =
   | InboundMessage
   | { kind: "apply" }
-  | { kind: "confirmNewChat" };
+  | { kind: "confirmNewChat" }
+  | { kind: "confirmFullAccess" }
+  | { kind: "webviewReady" };
 
 /**
  * The extension↔webview message envelope. Webview→extension commands ride

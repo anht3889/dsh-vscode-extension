@@ -16,7 +16,7 @@ pnpm monorepo with three workspace packages:
 | --- | --- |
 | `@dsh-vscode/contract` | Dependency-free wire protocol (ndjson messages) shared by extension ↔ bridge |
 | `@dsh-vscode/bridge`   | Drives the real `dsh` agent runtime and speaks the contract protocol |
-| `@dsh-vscode/extension` | The VS Code extension: webview UI, process manager, protocol client |
+| `dsh` | The VS Code extension: webview UI, process manager, protocol client |
 
 ## Install / run
 
@@ -37,9 +37,8 @@ To run the extension in a VS Code Extension Development Host:
 
 - `dsh.binaryPath` — path to the `dsh` binary. Empty (default) means the
   extension resolves `dsh` from `PATH`.
-- `DSH_SESSION_ROOT` — optional environment override for the JSONL session
-  directory used by the base DSH profile. Without it, DSH uses its normal
-  harness-home `sessions` directory.
+- `DSH_HOME` — optional harness-home override. Recent chats use the base
+  profile's `<DSH_HOME>/sessions` JSONL directory.
 
 ## Commands
 

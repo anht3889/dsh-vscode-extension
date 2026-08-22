@@ -23,6 +23,8 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private status: DshState = "idle";
   private hello: HelloMessage | undefined;
   private pending: ToolDiff[] = [];
+  private currentSessionId: string | undefined;
+  private fullAccessConfirmedFor: string | undefined;
 
   constructor(extensionUri: vscode.Uri, pm: ProcessManager) {
     this.extensionUri = extensionUri;
@@ -66,6 +68,29 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     if (
       typeof cmd === "object" &&
       cmd !== null &&
+      (cmd as { kind?: unknown }).kind === "confirmFullAccess"
+    ) {
+      void this.confirmFullAccess();
+      return;
+    }
+
+    if (
+      typeof cmd === "object" &&
+      cmd !== null &&
+      (cmd as { kind?: unknown }).kind === "webviewReady"
+    ) {
+      if (this.running && this.currentSessionId !== undefined) {
+        this.running.client.send({
+          kind: "resume",
+          sessionId: this.currentSessionId,
+        });
+      }
+      return;
+    }
+
+    if (
+      typeof cmd === "object" &&
+      cmd !== null &&
       (cmd as { kind?: unknown }).kind === "confirmNewChat"
     ) {
       void this.confirmNewChat();
@@ -96,6 +121,30 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     this.running.client.send({ kind: "newSession" });
   }
 
+  private async confirmFullAccess(): Promise<void> {
+    if (!this.running || this.currentSessionId === undefined) return;
+    const sessionId = this.currentSessionId;
+    if (this.fullAccessConfirmedFor !== sessionId) {
+      const choice = await vscode.window.showWarningMessage(
+        "Full Access disables sandbox confinement and approval prompts for this chat.",
+        { modal: true },
+        "Enable Full Access",
+      );
+      if (
+        choice !== "Enable Full Access" ||
+        !this.running ||
+        this.currentSessionId !== sessionId
+      ) {
+        return;
+      }
+      this.fullAccessConfirmedFor = sessionId;
+    }
+    this.running.client.send({
+      kind: "selectPermission",
+      preset: "danger-full-access",
+    });
+  }
+
   async startActiveFolder(): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!folder) {
@@ -124,12 +173,19 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       // surfaced here. Spawn errors and handshake timeouts already rejected `start()`
       // and are handled by the `catch` below.
       running.child.on("exit", (code, signal) => {
-        if (code === 0 && !signal) return; // graceful stop
+        const wasCurrent = this.running?.child === running.child;
+        if (wasCurrent) {
+          this.running = undefined;
+        }
+        if (!wasCurrent && code === 0 && !signal) return;
         const detail =
           code !== null
             ? `dsh process exited with code ${code}`
             : `dsh process terminated by ${signal ?? "signal"}`;
-        this.view?.webview.postMessage({ kind: "status", state: "error", detail });
+        this.view?.webview.postMessage({
+          kind: "hostDisconnected",
+          detail,
+        });
       });
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -141,6 +197,8 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   async stop(): Promise<void> {
     const running = this.running;
     this.running = undefined;
+    this.currentSessionId = undefined;
+    this.fullAccessConfirmedFor = undefined;
     if (running) await running.stop();
   }
 
@@ -163,6 +221,12 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       if (m.event.type === "tool/result") {
         this.pending.push(...diffsFromEvent(m.event));
       }
+    }
+    if (m.kind === "session" || m.kind === "ready") {
+      if (this.currentSessionId !== m.sessionId) {
+        this.fullAccessConfirmedFor = undefined;
+      }
+      this.currentSessionId = m.sessionId;
     }
 
     this.updateStatus(m);

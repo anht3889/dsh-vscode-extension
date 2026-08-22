@@ -39,14 +39,14 @@ export function Header({
   onNewChat,
   children,
 }: HeaderProps): JSX.Element {
-  const root = useRef<HTMLElement>(null);
+  const recentRoot = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!recentOpen) return;
     const onPointerDown = (event: PointerEvent): void => {
       if (
         event.target instanceof Node &&
-        root.current?.contains(event.target) === false
+        recentRoot.current?.contains(event.target) === false
       ) {
         onCloseRecent();
       }
@@ -56,26 +56,29 @@ export function Header({
   }, [recentOpen, onCloseRecent]);
 
   return (
-    <header className="dsh-header" ref={root}>
+    <header className="dsh-header">
       <div className="dsh-title">
         <span>DSH: Chat</span>
         {busy ? <span className="dsh-spinner" role="status" aria-label="DSH is working" /> : null}
       </div>
       <div className="dsh-header-actions">
-        <button
-          className="dsh-icon-button"
-          type="button"
-          title="Recent chats"
-          aria-label="Recent chats"
-          aria-expanded={recentOpen}
-          onClick={onRecent}
-        >
-          <Icon>
-            <path d="M3.2 4.2H1.5V2.5" />
-            <path d="M2 4a6 6 0 1 1-.1 7.8" />
-            <path d="M8 4.5V8l2.4 1.4" />
-          </Icon>
-        </button>
+        <div className="dsh-recent-owner" ref={recentRoot}>
+          <button
+            className="dsh-icon-button"
+            type="button"
+            title="Recent chats"
+            aria-label="Recent chats"
+            aria-expanded={recentOpen}
+            onClick={onRecent}
+          >
+            <Icon>
+              <path d="M3.2 4.2H1.5V2.5" />
+              <path d="M2 4a6 6 0 1 1-.1 7.8" />
+              <path d="M8 4.5V8l2.4 1.4" />
+            </Icon>
+          </button>
+          {children}
+        </div>
         <button
           className="dsh-icon-button"
           type="button"
@@ -100,7 +103,6 @@ export function Header({
           </Icon>
         </button>
       </div>
-      {children}
     </header>
   );
 }

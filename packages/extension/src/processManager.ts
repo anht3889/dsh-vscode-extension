@@ -73,16 +73,18 @@ export class ProcessManager {
     // A spawn ENOENT, profile-not-found crash, or silent no-op boot all reject
     // the Promise — which the caller surfaces as a visible error.
     const handshakeMs = this.options.handshakeTimeoutMs ?? 5000;
+    let unsubscribe = (): void => {};
     const ready = new Promise<void>((resolve, reject) => {
       let settled = false;
 
-      client.onMessage((m) => {
+      unsubscribe = client.onMessage((m) => {
         if (settled) return;
         if (m.kind === "hello") {
           settled = true;
           resolve();
         }
-      });
+      }, { consumeHistory: false });
+      if (settled) unsubscribe();
 
       child.on("error", (err) => {
         if (settled) return;
@@ -116,7 +118,11 @@ export class ProcessManager {
     });
 
     // Block until the handshake arrives or the child fails.
-    await ready;
+    try {
+      await ready;
+    } finally {
+      unsubscribe();
+    }
     this.running.set(folder, { child, client });
 
     // After handshake: a later exit (post-boot crash) is still surfaced.
