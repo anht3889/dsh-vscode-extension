@@ -9,6 +9,9 @@ lib/
 *.vsix
 .vscode-test/
 
+# OS metadata
+.DS_Store
+
 # pnpm / npm store + caches
 .pnpm-store/
 .npm-cache/
