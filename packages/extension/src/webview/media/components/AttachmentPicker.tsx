@@ -7,7 +7,6 @@ export interface AttachmentPickerProps {
   unavailable: boolean;
   onQuery(query: string): void;
   onPick(item: FileReferenceItem): void;
-  onBrowseFolder(): void;
   onAttachImage(): void;
   onDismiss(): void;
   autoFocus?: boolean;
@@ -19,7 +18,6 @@ export function AttachmentPicker({
   unavailable,
   onQuery,
   onPick,
-  onBrowseFolder,
   onAttachImage,
   onDismiss,
   autoFocus = false,
@@ -64,13 +62,6 @@ export function AttachmentPicker({
         onChange={(event) => onQuery(event.target.value)}
       />
       <div className="dsh-attachment-actions">
-        <button
-          className="dsh-attachment-row"
-          type="button"
-          onClick={onBrowseFolder}
-        >
-          Browse folders…
-        </button>
         <button
           className="dsh-attachment-row"
           type="button"

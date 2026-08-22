@@ -15,7 +15,6 @@ function renderPicker(
       unavailable={false}
       onQuery={vi.fn()}
       onPick={vi.fn()}
-      onBrowseFolder={vi.fn()}
       onAttachImage={vi.fn()}
       onDismiss={vi.fn()}
       {...props}
@@ -26,7 +25,7 @@ function renderPicker(
 afterEach(cleanup);
 
 describe("AttachmentPicker", () => {
-  it("offers native actions and closes on Escape", () => {
+  it("offers the image action and closes on Escape", () => {
     const onDismiss = vi.fn();
     render(
       <AttachmentPicker
@@ -35,20 +34,17 @@ describe("AttachmentPicker", () => {
         unavailable={false}
         onQuery={vi.fn()}
         onPick={vi.fn()}
-        onBrowseFolder={vi.fn()}
         onAttachImage={vi.fn()}
         onDismiss={onDismiss}
       />,
     );
-    expect(screen.getByRole("button", { name: "Browse folders…" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Attach image…" })).toBeVisible();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onDismiss).toHaveBeenCalled();
   });
 
-  it("keeps native actions and shows unavailable copy", () => {
+  it("keeps the image action and shows unavailable copy", () => {
     renderPicker({ items: [], unavailable: true });
-    expect(screen.getByRole("button", { name: "Browse folders…" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Attach image…" })).toBeVisible();
     expect(screen.getByText("File search unavailable")).toBeVisible();
     expect(screen.queryByRole("option")).toBeNull();
@@ -78,13 +74,12 @@ describe("AttachmentPicker", () => {
           query=""
           items={[{ path: "src", kind: "directory" }]}
           unavailable={false}
-          onQuery={vi.fn()}
-          onPick={vi.fn()}
-          onBrowseFolder={vi.fn()}
-          onAttachImage={vi.fn()}
-          onDismiss={onDismiss}
-        />
-      </div>,
+        onQuery={vi.fn()}
+        onPick={vi.fn()}
+        onAttachImage={vi.fn()}
+        onDismiss={onDismiss}
+      />
+    </div>,
     );
     fireEvent.pointerDown(screen.getByTestId("outside"));
     expect(onDismiss).toHaveBeenCalled();

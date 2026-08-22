@@ -44,7 +44,6 @@ function renderComposer(
       onPickReference={vi.fn()}
       onDismissPicker={vi.fn()}
       onRemoveChip={vi.fn()}
-      onBrowseFolder={vi.fn()}
       onAttachImage={vi.fn()}
       onSubmit={vi.fn()}
       onCancel={vi.fn()}

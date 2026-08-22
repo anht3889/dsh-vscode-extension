@@ -1,17 +1,14 @@
 import * as vscode from "vscode";
 import type { ChildProcess } from "node:child_process";
-import type { HelloMessage, InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
+import type { InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
 import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
 import type { ProtocolClient } from "../protocolClient.js";
 import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
 import { nextStatus, type DshState } from "../statusBar.js";
-import { encodeImageSelection, pickRelativeFolder } from "./attachments.js";
-import type {
-  FolderPickedMessage,
-  ImagesPickedMessage,
-} from "./media/vscode.js";
+import { encodeImageSelection } from "./attachments.js";
+import type { ImagesPickedMessage } from "./media/vscode.js";
 
 interface Running {
   client: ProtocolClient;
@@ -28,8 +25,6 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private startingChild = false;
   private startGeneration = 0;
   private status: DshState = "idle";
-  private hello: HelloMessage | undefined;
-  private readyCwd: string | undefined;
   private pending: ToolDiff[] = [];
   private currentSessionId: string | undefined;
   private fullAccessConfirmedFor: string | undefined;
@@ -95,11 +90,6 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (kind === "browseFolder") {
-      void this.browseFolder();
-      return;
-    }
-
     if (kind === "attachImage") {
       void this.attachImages();
       return;
@@ -116,34 +106,6 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.decorations.markTouched(this.pending.map((d) => d.path));
       this.pending = [];
     }
-  }
-
-  private async browseFolder(): Promise<void> {
-    const result = await pickRelativeFolder(
-      async () => {
-        const selected = await vscode.window.showOpenDialog({
-          canSelectFiles: false,
-          canSelectFolders: true,
-          canSelectMany: false,
-        });
-        return selected?.[0]?.fsPath;
-      },
-      () => this.readyCwd ?? this.hello?.cwd,
-    );
-    if (result.kind === "cancelled" || result.kind === "unavailable") return;
-    if (result.kind === "outside") {
-      this.view?.webview.postMessage({
-        kind: "status",
-        state: "error",
-        detail: "Folder is outside the session workspace",
-      });
-      return;
-    }
-    const message: FolderPickedMessage = {
-      kind: "folderPicked",
-      path: result.path,
-    };
-    this.view?.webview.postMessage(message);
   }
 
   private async attachImages(): Promise<void> {
@@ -267,14 +229,12 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     this.running = undefined;
     this.currentSessionId = undefined;
     this.fullAccessConfirmedFor = undefined;
-    this.readyCwd = undefined;
     if (running) await running.stop();
   }
 
   private handleOutbound(m: OutboundMessage): void {
-    // Version handshake is host-only: record it, do not forward to the webview.
+    // Version handshake is host-only: check it, do not forward to the webview.
     if (m.kind === "hello") {
-      this.hello = m;
       if (m.version !== PROTOCOL_VERSION) {
         console.warn(
           `[dsh] protocol version mismatch: bridge=${m.version} extension=${PROTOCOL_VERSION}`,
@@ -300,9 +260,6 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
         this.fullAccessConfirmedFor = undefined;
       }
       this.currentSessionId = m.sessionId;
-    }
-    if (m.kind === "ready") {
-      this.readyCwd = m.cwd;
     }
 
     this.updateStatus(m);

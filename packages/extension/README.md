@@ -8,8 +8,8 @@ The chat header exposes workspace-scoped recent sessions and New Chat. The
 squircle composer selects the current session's permission preset and model,
 shows next-request context usage, and sends with Enter (Shift+Enter inserts a
 newline). Plus, left of the context meter, opens a workspace file and folder
-search plus native Browse folders and Attach image actions. File and folder
-chips are sent as `@path` references; DSH reads their contents only when needed.
+search plus a native Attach image action. File and folder chips are sent as
+`@path` references; DSH reads their contents only when needed.
 Image chips depend on the selected model declaring image input and on DSH
 attachment limits. Full Access requires confirmation once per chat. Settings is
 reserved for a later release.

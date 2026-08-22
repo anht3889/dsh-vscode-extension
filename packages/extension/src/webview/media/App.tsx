@@ -193,12 +193,6 @@ export function App(): JSX.Element {
     dispatch({ kind: "chipRemoved", id });
   }, []);
 
-  const onBrowseFolder = useCallback((): void => {
-    setFocusPickerSearch(false);
-    dispatch({ kind: "pickerDismissed" });
-    post({ kind: "browseFolder" });
-  }, [post]);
-
   const onAttachImage = useCallback((): void => {
     setFocusPickerSearch(false);
     dispatch({ kind: "pickerDismissed" });
@@ -272,7 +266,6 @@ export function App(): JSX.Element {
         onPickReference={onPickReference}
         onDismissPicker={onDismissPicker}
         onRemoveChip={onRemoveChip}
-        onBrowseFolder={onBrowseFolder}
         onAttachImage={onAttachImage}
         onSubmit={onSubmit}
         onCancel={() => post({ kind: "cancel", cause: "user" })}

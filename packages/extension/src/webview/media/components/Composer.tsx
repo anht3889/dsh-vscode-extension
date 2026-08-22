@@ -30,7 +30,6 @@ interface ComposerProps {
   onPickReference(item: FileReferenceItem): void;
   onDismissPicker(): void;
   onRemoveChip(id: string): void;
-  onBrowseFolder(): void;
   onAttachImage(): void;
   focusPickerSearch: boolean;
   onSubmit(): void;
@@ -76,7 +75,6 @@ export function Composer({
   onPickReference,
   onDismissPicker,
   onRemoveChip,
-  onBrowseFolder,
   onAttachImage,
   focusPickerSearch,
   onSubmit,
@@ -137,7 +135,6 @@ export function Composer({
           unavailable={picker.unavailable}
           onQuery={onPickerQuery}
           onPick={onPickReference}
-          onBrowseFolder={onBrowseFolder}
           onAttachImage={onAttachImage}
           onDismiss={onDismissPicker}
           autoFocus={focusPickerSearch}

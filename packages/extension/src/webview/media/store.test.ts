@@ -391,25 +391,23 @@ describe("reduce", () => {
       },
     ]);
 
-    const folder = reduce(file, {
-      kind: "folderPicked",
-      path: "src/lib",
+    const reopened = reduce(file, {
+      kind: "pickerOpened",
+      text: "read  now @lib",
+      token: { start: 10, end: 14, query: "lib", quoted: false },
+      requestId: "r2",
     });
+    const folder = reduce(reopened, {
+      kind: "referencePicked",
+      id: "c2",
+      item: { path: "src/lib", kind: "directory" },
+    });
+    expect(folder.draft).toBe("read  now ");
     expect(folder.chips[1]).toMatchObject({
       kind: "folder",
       path: "src/lib",
       mention: "@src/lib/",
       label: "lib",
-    });
-
-    const spacedFolder = reduce(folder, {
-      kind: "folderPicked",
-      path: "my folder",
-    });
-    expect(spacedFolder.chips[2]).toMatchObject({
-      path: "my folder",
-      mention: '@"my folder/"',
-      label: "my folder",
     });
   });
 

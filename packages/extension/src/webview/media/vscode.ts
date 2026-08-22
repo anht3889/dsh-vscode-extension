@@ -9,22 +9,15 @@ import type {
  * {@link InboundMessage}, which the panel forwards to the bridge unchanged, or
  * a host-only instruction the panel handles itself and never forwards — editor
  * edits (`apply`), modal confirmations, lifecycle (`webviewReady`), and the
- * native attachment dialogs (`browseFolder`, `attachImage`).
+ * native image dialog (`attachImage`).
  */
 export type UiCommandCmd =
   | InboundMessage
   | { kind: "apply" }
-  | { kind: "browseFolder" }
   | { kind: "attachImage" }
   | { kind: "confirmNewChat" }
   | { kind: "confirmFullAccess" }
   | { kind: "webviewReady" };
-
-/** A folder selected by the extension host, relative to the session workspace. */
-export interface FolderPickedMessage {
-  kind: "folderPicked";
-  path: string;
-}
 
 /** Images selected and encoded by the extension host. */
 export interface ImagesPickedMessage {

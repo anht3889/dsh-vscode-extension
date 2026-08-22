@@ -10,10 +10,7 @@ import type {
   SessionListItem,
   ToolDiff,
 } from "@dsh-vscode/contract";
-import type {
-  FolderPickedMessage,
-  ImagesPickedMessage,
-} from "./vscode.js";
+import type { ImagesPickedMessage } from "./vscode.js";
 import { formatChipMention } from "./chipMention.js";
 
 // ---- webview UI state -------------------------------------------------------
@@ -159,7 +156,6 @@ export type UiMessage =
   | OutboundMessage
   | HostDisconnectedMessage
   | AskSettledMessage
-  | FolderPickedMessage
   | ImagesPickedMessage
   | DraftChangedMessage
   | PickerOpenedMessage
@@ -381,25 +377,6 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         picker: undefined,
         error: retryingInvalidReference ? undefined : state.error,
         status: retryingInvalidReference ? "idle" : state.status,
-      };
-    }
-
-    case "folderPicked": {
-      const path = msg.path.replace(/\/+$/, "");
-      const mention = formatChipMention({ path, kind: "directory" }, false);
-      if (mention === undefined) return state;
-      return {
-        ...state,
-        chips: [
-          ...state.chips,
-          {
-            id: nextChipId(state, "folder"),
-            kind: "folder",
-            path,
-            mention,
-            label: labelFromPath(path),
-          },
-        ],
       };
     }
 
