@@ -1,4 +1,8 @@
-import type { InboundMessage, OutboundMessage } from "@dsh-vscode/contract";
+import type {
+  EncodedImageAttachment,
+  InboundMessage,
+  OutboundMessage,
+} from "@dsh-vscode/contract";
 
 /**
  * A host-local command that never reaches the bridge. `cmd` carries either an
@@ -8,9 +12,23 @@ import type { InboundMessage, OutboundMessage } from "@dsh-vscode/contract";
 export type UiCommandCmd =
   | InboundMessage
   | { kind: "apply" }
+  | { kind: "browseFolder" }
+  | { kind: "attachImage" }
   | { kind: "confirmNewChat" }
   | { kind: "confirmFullAccess" }
   | { kind: "webviewReady" };
+
+/** A folder selected by the extension host, relative to the session workspace. */
+export interface FolderPickedMessage {
+  kind: "folderPicked";
+  path: string;
+}
+
+/** Images selected and encoded by the extension host. */
+export interface ImagesPickedMessage {
+  kind: "imagesPicked";
+  images: EncodedImageAttachment[];
+}
 
 /**
  * The extension↔webview message envelope. Webview→extension commands ride

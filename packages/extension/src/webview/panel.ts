@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { ChildProcess } from "node:child_process";
+import { basename } from "node:path";
 import type { HelloMessage, InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
 import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
@@ -7,6 +8,11 @@ import type { ProtocolClient } from "../protocolClient.js";
 import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
 import { nextStatus, type DshState } from "../statusBar.js";
+import { encodeImage, relativeFolderPath } from "./attachments.js";
+import type {
+  FolderPickedMessage,
+  ImagesPickedMessage,
+} from "./media/vscode.js";
 
 interface Running {
   client: ProtocolClient;
@@ -24,6 +30,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private startGeneration = 0;
   private status: DshState = "idle";
   private hello: HelloMessage | undefined;
+  private readyCwd: string | undefined;
   private pending: ToolDiff[] = [];
   private currentSessionId: string | undefined;
   private fullAccessConfirmedFor: string | undefined;
@@ -55,32 +62,24 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     const type = (msg as { type?: unknown }).type;
     if (type !== "dsh/ui") return;
     const cmd = (msg as { cmd?: unknown }).cmd;
+    const kind =
+      typeof cmd === "object" && cmd !== null
+        ? (cmd as { kind?: unknown }).kind
+        : undefined;
 
     // Host-local "apply": the extension owns the editor, so apply accumulated
     // diffs here and never forward to the bridge.
-    if (
-      typeof cmd === "object" &&
-      cmd !== null &&
-      (cmd as { kind?: unknown }).kind === "apply"
-    ) {
+    if (kind === "apply") {
       void this.applyPending();
       return;
     }
 
-    if (
-      typeof cmd === "object" &&
-      cmd !== null &&
-      (cmd as { kind?: unknown }).kind === "confirmFullAccess"
-    ) {
+    if (kind === "confirmFullAccess") {
       void this.confirmFullAccess();
       return;
     }
 
-    if (
-      typeof cmd === "object" &&
-      cmd !== null &&
-      (cmd as { kind?: unknown }).kind === "webviewReady"
-    ) {
+    if (kind === "webviewReady") {
       if (this.running && this.currentSessionId !== undefined) {
         this.running.client.send({
           kind: "resume",
@@ -92,12 +91,18 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (
-      typeof cmd === "object" &&
-      cmd !== null &&
-      (cmd as { kind?: unknown }).kind === "confirmNewChat"
-    ) {
+    if (kind === "confirmNewChat") {
       void this.confirmNewChat();
+      return;
+    }
+
+    if (kind === "browseFolder") {
+      void this.browseFolder();
+      return;
+    }
+
+    if (kind === "attachImage") {
+      void this.attachImages();
       return;
     }
 
@@ -112,6 +117,55 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.decorations.markTouched(this.pending.map((d) => d.path));
       this.pending = [];
     }
+  }
+
+  private async browseFolder(): Promise<void> {
+    const cwd = this.readyCwd ?? this.hello?.cwd;
+    if (cwd === undefined) return;
+    const selected = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+    });
+    const uri = selected?.[0];
+    if (uri === undefined) return;
+    const path = relativeFolderPath(cwd, uri.fsPath);
+    if (path === undefined) {
+      this.view?.webview.postMessage({
+        kind: "status",
+        state: "error",
+        detail: "Folder is outside the session workspace",
+      });
+      return;
+    }
+    const message: FolderPickedMessage = { kind: "folderPicked", path };
+    this.view?.webview.postMessage(message);
+  }
+
+  private async attachImages(): Promise<void> {
+    const selected = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: { Images: ["png", "jpg", "jpeg", "webp", "gif"] },
+    });
+    if (selected === undefined) return;
+
+    const images: ImagesPickedMessage["images"] = [];
+    for (const uri of selected) {
+      try {
+        images.push(await encodeImage(uri));
+      } catch {
+        this.view?.webview.postMessage({
+          kind: "status",
+          state: "error",
+          detail: `Failed to attach ${basename(uri.fsPath)}`,
+        });
+      }
+    }
+    if (images.length === 0) return;
+    const message: ImagesPickedMessage = { kind: "imagesPicked", images };
+    this.view?.webview.postMessage(message);
   }
 
   private async confirmNewChat(): Promise<void> {
@@ -212,6 +266,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     this.running = undefined;
     this.currentSessionId = undefined;
     this.fullAccessConfirmedFor = undefined;
+    this.readyCwd = undefined;
     if (running) await running.stop();
   }
 
@@ -244,6 +299,9 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
         this.fullAccessConfirmedFor = undefined;
       }
       this.currentSessionId = m.sessionId;
+    }
+    if (m.kind === "ready") {
+      this.readyCwd = m.cwd;
     }
 
     this.updateStatus(m);
