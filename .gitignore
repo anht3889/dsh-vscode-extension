@@ -12,6 +12,7 @@ lib/
 .pnpm-store/
 .npm-cache/
 *.tsbuildinfo
+.worktrees/
 
 # Task 0 spike install byproducts (Task 1 owns the real root workspace + lockfile)
 packages/bridge/pnpm-lock.yaml
