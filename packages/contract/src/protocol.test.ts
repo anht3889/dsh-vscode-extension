@@ -30,9 +30,32 @@ describe("isInboundMessage", () => {
   });
 });
 
-describe("protocol v2", () => {
-  it("PROTOCOL_VERSION is 2", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+describe("protocol v3", () => {
+  it("uses protocol v3", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+  });
+
+  it("accepts reference search and raster image submit records", () => {
+    expect(isInboundMessage({
+      kind: "listFileReferences", query: "src", requestId: "r1",
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "fileReferences", requestId: "r1",
+      items: [{ path: "src", kind: "directory" }],
+    })).toBe(true);
+    expect(isInboundMessage({
+      kind: "submit",
+      text: "describe this",
+      images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
+    })).toBe(true);
+  });
+
+  it("rejects invalid image media types at the wire boundary", () => {
+    expect(isInboundMessage({
+      kind: "submit",
+      text: "",
+      images: [{ mediaType: "image/svg+xml", data: "PHN2Zz4=" }],
+    })).toBe(false);
   });
 
   it("accepts ready, sessions, catalog, permissions, context, history", () => {
