@@ -21,6 +21,7 @@ function hooks() {
       resume: vi.fn(),
       selectModel: vi.fn(),
       selectPermission: vi.fn(),
+      listFileReferences: vi.fn(),
     },
     provider: {
       ask: vi.fn<(request: AskUserQuestionRequest) => Promise<AskUserQuestionAnswer>>(),
@@ -87,6 +88,22 @@ describe("dispatchCommand", () => {
     expect(h.runner.resume).toHaveBeenCalledWith("s1");
     expect(h.runner.selectModel).toHaveBeenCalledWith("p", "m");
     expect(h.runner.selectPermission).toHaveBeenCalledWith("read-only");
+  });
+
+  it("maps listFileReferences to the runner", () => {
+    const h = hooks();
+
+    dispatchCommand(
+      inertCtx,
+      {
+        kind: "listFileReferences",
+        query: "src",
+        requestId: "r1",
+      },
+      h,
+    );
+
+    expect(h.runner.listFileReferences).toHaveBeenCalledWith("src", "r1");
   });
 
   it("forwards optional submit picker fields", () => {

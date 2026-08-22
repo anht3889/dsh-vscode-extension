@@ -74,6 +74,9 @@ export function dispatchCommand(
     case "selectPermission":
       hooks.runner.selectPermission(msg.preset);
       return;
+    case "listFileReferences":
+      hooks.runner.listFileReferences(msg.query, msg.requestId);
+      return;
     case "exit":
       return;
     default: {

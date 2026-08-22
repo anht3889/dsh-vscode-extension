@@ -26,6 +26,7 @@ import type {
 } from "@dsh-vscode/contract";
 import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
+import { createFileReferenceSearch } from "./file-references.js";
 
 const PRESET_LABELS: Record<string, string> = {
   "read-only": "Read Only",
@@ -252,6 +253,7 @@ export interface SessionController {
   resume(sessionId: string): void;
   selectModel(provider: string, model: string): void;
   selectPermission(preset: string): void;
+  listFileReferences(query: string, requestId: string): void;
 }
 
 /**
@@ -328,6 +330,12 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     handle: initialHandle,
     selectionRef: initialSelectionRef,
   };
+  const fileReferenceSearch = createFileReferenceSearch(
+    ctx,
+    () => live.handle.agent,
+    (message) => io.send(message),
+  );
+  io.onDisconnect(fileReferenceSearch.dispose);
 
   const emitLiveSession = async (
     current: LiveSession,
@@ -371,6 +379,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   const replaceLive = async (
     create: (selectionRef: LiveSelectionRef) => Promise<AgentHandle>,
   ): Promise<void> => {
+    fileReferenceSearch.dispose();
     const previous = live;
     const nextSelectionRef: LiveSelectionRef = {
       current: { ...previous.selectionRef.current },
@@ -733,6 +742,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     resume,
     selectModel,
     selectPermission,
+    listFileReferences: fileReferenceSearch.list,
   };
 }
 

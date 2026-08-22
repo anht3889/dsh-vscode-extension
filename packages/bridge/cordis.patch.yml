@@ -13,6 +13,8 @@
       You are a coding agent powered by the {{model}} model.
 
 - insert:
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
     - id: vscode-runner
       name: '@dsh-vscode/bridge'
       inject: [agents, agentDefaultModel, sessions, userQuestions, appExit]
