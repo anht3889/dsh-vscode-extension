@@ -1,7 +1,7 @@
 # DSH VS Code Composer Attachments — Design Spec
 
 **Date:** 2026-08-22
-**Status:** Draft — pending user review
+**Status:** Approved
 **Classification:** Architectural (protocol v3 + bridge file-reference/image admission + webview picker)
 **Baseline:** `dsh-vscode-extension` `main` after chat-chrome and focus-ring fixes.
 
