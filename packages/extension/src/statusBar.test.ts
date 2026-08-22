@@ -35,4 +35,27 @@ describe("statusBar.nextStatus", () => {
   it("non-turn event keeps previous state with description", () => {
     expect(nextStatus("awaiting-approval", event("message"))).toEqual({ state: "awaiting-approval", text: "Awaiting approval" });
   });
+  it("ready and catalog messages keep the previous state", () => {
+    const ready: OutboundMessage = {
+      kind: "ready",
+      sessionId: "s",
+      cwd: "/tmp",
+      models: {
+        current: { provider: "p", model: "m" },
+        models: [],
+      },
+      permissions: {
+        current: "workspace-write",
+        presets: [],
+      },
+    };
+    expect(nextStatus("thinking", ready).state).toBe("thinking");
+    expect(
+      nextStatus("idle", {
+        kind: "catalog",
+        current: { provider: "p", model: "m" },
+        models: [],
+      }).state,
+    ).toBe("idle");
+  });
 });

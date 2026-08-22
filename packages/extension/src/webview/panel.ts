@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { ChildProcess } from "node:child_process";
 import type { HelloMessage, InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
 import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
@@ -9,7 +10,8 @@ import { nextStatus, type DshState } from "../statusBar.js";
 
 interface Running {
   client: ProtocolClient;
-  stop(): Promise<void>;
+  child: ChildProcess;
+  stop(): void;
 }
 
 export class DshChatProvider implements vscode.WebviewViewProvider {
@@ -44,7 +46,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   onUiCommand(msg: unknown): void {
-    // Webview -> extension: { type: "dsh/ui", cmd: InboundMessage | { kind: "apply" } }
+    // Webview -> extension: bridge commands plus host-owned UI actions.
     if (typeof msg !== "object" || msg === null || !("type" in msg)) return;
     const type = (msg as { type?: unknown }).type;
     if (type !== "dsh/ui") return;
@@ -61,6 +63,15 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    if (
+      typeof cmd === "object" &&
+      cmd !== null &&
+      (cmd as { kind?: unknown }).kind === "confirmNewChat"
+    ) {
+      void this.confirmNewChat();
+      return;
+    }
+
     if (!isInboundMessage(cmd)) return;
     if (!this.running) return;
     this.running.client.send(cmd);
@@ -74,15 +85,56 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  private async confirmNewChat(): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      "Cancel the current turn and start a new chat?",
+      { modal: true },
+      "Start new chat",
+    );
+    if (choice !== "Start new chat" || !this.running) return;
+    this.running.client.send({ kind: "cancel", cause: "user" });
+    this.running.client.send({ kind: "newSession" });
+  }
+
   async startActiveFolder(): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!folder) return;
+    if (!folder) {
+      // No workspace folder open — surface this as a visible error instead of
+      // silently returning, which left the user wondering why chat did nothing.
+      this.view?.webview.postMessage({
+        kind: "status",
+        state: "error",
+        detail: "No workspace folder open. Open a folder first, then run DSH: Start.",
+      });
+      return;
+    }
     if (this.running) return;
-    const running = await this.pm.start(folder);
-    this.running = running;
-    running.client.onMessage((m: OutboundMessage) => this.handleOutbound(m));
-    if (this.view) {
-      this.view.webview.postMessage({ kind: "status", state: "idle", detail: "dsh started" });
+
+    this.view?.webview.postMessage({
+      kind: "status",
+      state: "thinking",
+      detail: "Starting…",
+    });
+    try {
+      const running = await this.pm.start(folder);
+      this.running = running;
+      running.client.onMessage((m: OutboundMessage) => this.handleOutbound(m));
+
+      // Post-boot crashes (the handshake already arrived, but dsh exits later) are
+      // surfaced here. Spawn errors and handshake timeouts already rejected `start()`
+      // and are handled by the `catch` below.
+      running.child.on("exit", (code, signal) => {
+        if (code === 0 && !signal) return; // graceful stop
+        const detail =
+          code !== null
+            ? `dsh process exited with code ${code}`
+            : `dsh process terminated by ${signal ?? "signal"}`;
+        this.view?.webview.postMessage({ kind: "status", state: "error", detail });
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.view?.webview.postMessage({ kind: "status", state: "error", detail });
+      return;
     }
   }
 

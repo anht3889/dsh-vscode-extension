@@ -5,7 +5,10 @@ import type { InboundMessage, OutboundMessage } from "@dsh-vscode/contract";
  * {@link InboundMessage} (forwarded to the bridge) or a host-only instruction
  * such as `{ kind: "apply" }` (apply accumulated diffs in the editor).
  */
-export type UiCommandCmd = InboundMessage | { kind: "apply" };
+export type UiCommandCmd =
+  | InboundMessage
+  | { kind: "apply" }
+  | { kind: "confirmNewChat" };
 
 /**
  * The extension↔webview message envelope. Webview→extension commands ride
