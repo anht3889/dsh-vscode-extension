@@ -14,8 +14,13 @@ import { dispatchCommand } from "../src/commands.js";
 function hooks() {
   return {
     runner: {
-      submit: vi.fn<(text: string) => void>(),
-      cancel: vi.fn<() => void>(),
+      submit: vi.fn(),
+      cancel: vi.fn(),
+      listSessions: vi.fn(),
+      newSession: vi.fn(),
+      resume: vi.fn(),
+      selectModel: vi.fn(),
+      selectPermission: vi.fn(),
     },
     provider: {
       ask: vi.fn<(request: AskUserQuestionRequest) => Promise<AskUserQuestionAnswer>>(),
@@ -31,7 +36,7 @@ describe("dispatchCommand", () => {
     const h = hooks();
     const msg: InboundMessage = { kind: "submit", text: "hi" };
     dispatchCommand(inertCtx, msg, h);
-    expect(h.runner.submit).toHaveBeenCalledWith("hi");
+    expect(h.runner.submit).toHaveBeenCalledWith("hi", {});
     expect(h.runner.cancel).not.toHaveBeenCalled();
     expect(h.provider.resolve).not.toHaveBeenCalled();
   });
@@ -68,5 +73,39 @@ describe("dispatchCommand", () => {
     const resolved = h.provider.resolve.mock.calls[0]![1];
     expect(resolved).toEqual({ answers: [{ id: "q1", selected: ["yes"] }] });
     expect("custom" in resolved.answers[0]).toBe(false);
+  });
+
+  it("maps listSessions / newSession / resume / selectModel / selectPermission", () => {
+    const h = hooks();
+    dispatchCommand(inertCtx, { kind: "listSessions" }, h);
+    dispatchCommand(inertCtx, { kind: "newSession" }, h);
+    dispatchCommand(inertCtx, { kind: "resume", sessionId: "s1" }, h);
+    dispatchCommand(inertCtx, { kind: "selectModel", provider: "p", model: "m" }, h);
+    dispatchCommand(inertCtx, { kind: "selectPermission", preset: "read-only" }, h);
+    expect(h.runner.listSessions).toHaveBeenCalledOnce();
+    expect(h.runner.newSession).toHaveBeenCalledOnce();
+    expect(h.runner.resume).toHaveBeenCalledWith("s1");
+    expect(h.runner.selectModel).toHaveBeenCalledWith("p", "m");
+    expect(h.runner.selectPermission).toHaveBeenCalledWith("read-only");
+  });
+
+  it("forwards optional submit picker fields", () => {
+    const h = hooks();
+    dispatchCommand(
+      inertCtx,
+      {
+        kind: "submit",
+        text: "hi",
+        provider: "p",
+        model: "m",
+        permission: "read-only",
+      },
+      h,
+    );
+    expect(h.runner.submit).toHaveBeenCalledWith("hi", {
+      provider: "p",
+      model: "m",
+      permission: "read-only",
+    });
   });
 });

@@ -91,18 +91,33 @@ export async function runVscode(
   io.send({ kind: "status", state: "idle" });
 }
 
-/**
- * A runner returned by {@link createRunner}, retaining a single live Agent and
- * exposing repeated {@link submit} / {@link cancel} on it. Message construction
- * accepts the same wire-bound `Io` and the shared `session/event` listener that
- * `createRunner` registers once.
- */
-export interface RetainedRunner {
-  /** Queue a follow-up turn on the retained agent and relay quiescence + idle. */
-  submit(text: string): void;
-  /** Cancel the retained agent's active turn (user-initiated). */
-  cancel(): void;
+/** Optional picker fields forwarded with a submit command. */
+export interface SubmitOptions {
+  provider?: string;
+  model?: string;
+  permission?: string;
 }
+
+/**
+ * Full session command surface the bridge dispatcher routes inbound protocol
+ * messages onto. {@link createRunner} implements only submit/cancel until Task 3
+ * wires the remaining session lifecycle commands.
+ */
+export interface SessionController {
+  submit(text: string, opts?: SubmitOptions): void;
+  cancel(): void;
+  listSessions(): void;
+  newSession(): void;
+  resume(sessionId: string): void;
+  selectModel(provider: string, model: string): void;
+  selectPermission(preset: string): void;
+}
+
+/**
+ * Live runner surface returned by {@link createRunner} today: submit/cancel only.
+ * Task 3 expands the implementation to the full {@link SessionController}.
+ */
+export type RetainedRunner = Pick<SessionController, "submit" | "cancel">;
 
 /**
  * Create a retained runner: mount the boot recipe once, register the
