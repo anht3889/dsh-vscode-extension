@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import type { ChildProcess } from "node:child_process";
-import { basename } from "node:path";
 import type { HelloMessage, InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
 import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
@@ -8,7 +7,7 @@ import type { ProtocolClient } from "../protocolClient.js";
 import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
 import { nextStatus, type DshState } from "../statusBar.js";
-import { encodeImage, pickRelativeFolder } from "./attachments.js";
+import { encodeImageSelection, pickRelativeFolder } from "./attachments.js";
 import type {
   FolderPickedMessage,
   ImagesPickedMessage,
@@ -154,19 +153,16 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       canSelectMany: true,
       filters: { Images: ["png", "jpg", "jpeg", "webp", "gif"] },
     });
-    if (selected === undefined) return;
-
-    const images: ImagesPickedMessage["images"] = [];
-    for (const uri of selected) {
-      try {
-        images.push(await encodeImage(uri));
-      } catch {
-        this.view?.webview.postMessage({
-          kind: "status",
-          state: "error",
-          detail: `Failed to attach ${basename(uri.fsPath)}`,
-        });
-      }
+    const { images, failed } = await encodeImageSelection(
+      selected,
+      async (uri) => vscode.workspace.fs.readFile(uri),
+    );
+    for (const name of failed) {
+      this.view?.webview.postMessage({
+        kind: "status",
+        state: "error",
+        detail: `Failed to attach ${name}`,
+      });
     }
     if (images.length === 0) return;
     const message: ImagesPickedMessage = { kind: "imagesPicked", images };

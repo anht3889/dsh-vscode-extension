@@ -1,5 +1,5 @@
 import type { EncodedImageAttachment } from "@dsh-vscode/contract";
-import React, { useEffect, useState } from "react";
+import React from "react";
 import type { DraftChip } from "../store.js";
 
 export interface ChipRailProps {
@@ -7,13 +7,13 @@ export interface ChipRailProps {
   onRemove(id: string): void;
 }
 
-function blobFromBase64(data: string, mediaType: string): Blob {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Blob([bytes], { type: mediaType });
+/**
+ * Thumbnails render as `data:` URIs because the panel CSP allows `img-src`
+ * only from the webview resource origin and `data:`; a `blob:` object URL is
+ * blocked there and the chip would show a broken image.
+ */
+function dataUri(image: EncodedImageAttachment): string {
+  return `data:${image.mediaType};base64,${image.data}`;
 }
 
 function FileGlyph(): JSX.Element {
@@ -43,40 +43,28 @@ function ImageGlyph(): JSX.Element {
   );
 }
 
-function ImageThumb({
-  image,
-  label,
-}: {
-  image: EncodedImageAttachment;
-  label: string;
-}): JSX.Element | null {
-  const [url, setUrl] = useState<string | undefined>();
-
-  useEffect(() => {
-    const next = URL.createObjectURL(blobFromBase64(image.data, image.mediaType));
-    setUrl(next);
-    return () => {
-      URL.revokeObjectURL(next);
-    };
-  }, [image.data, image.mediaType]);
-
-  if (url === undefined) return null;
-  return <img className="dsh-chip-thumbnail" src={url} alt={label} />;
-}
-
 export function ChipRail({ chips, onRemove }: ChipRailProps): JSX.Element {
   return (
-    <div className="dsh-chip-rail" aria-label="Attachments">
+    <div className="dsh-chip-rail" role="list" aria-label="Attachments">
       {chips.map((chip) => {
         const title = chip.kind === "image" ? chip.label : chip.mention;
         return (
-          <div className="dsh-chip" key={chip.id} title={title}>
+          <div
+            className="dsh-chip"
+            role="listitem"
+            key={chip.id}
+            title={title}
+          >
             {chip.kind === "file" ? <FileGlyph /> : null}
             {chip.kind === "folder" ? <FolderGlyph /> : null}
             {chip.kind === "image" ? (
               <>
                 <ImageGlyph />
-                <ImageThumb image={chip.image} label={chip.label} />
+                <img
+                  className="dsh-chip-thumbnail"
+                  src={dataUri(chip.image)}
+                  alt={chip.label}
+                />
               </>
             ) : null}
             <span className="dsh-chip-label">{chip.label}</span>

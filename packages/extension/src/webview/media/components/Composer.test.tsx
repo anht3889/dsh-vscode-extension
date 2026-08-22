@@ -60,16 +60,6 @@ afterEach(cleanup);
 
 describe("Composer send gating", () => {
   it("enables Send for an image-only draft", () => {
-    Object.defineProperty(URL, "createObjectURL", {
-      configurable: true,
-      writable: true,
-      value: () => "blob:thumb",
-    });
-    Object.defineProperty(URL, "revokeObjectURL", {
-      configurable: true,
-      writable: true,
-      value: () => undefined,
-    });
     renderComposer({ chips: [imageChip] });
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
   });
@@ -93,6 +83,41 @@ describe("Composer send gating", () => {
     fireEvent.click(stop);
     expect(onCancel).toHaveBeenCalled();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe("Composer attach button", () => {
+  it("opens the picker at the end of a never-focused draft", () => {
+    const onOpenPicker = vi.fn();
+    renderComposer({ draft: "review this", onOpenPicker });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Attach files, folders, or images" }),
+    );
+    expect(onOpenPicker).toHaveBeenCalledWith("review this".length);
+  });
+
+  it("opens the picker at the caret the user placed", () => {
+    const onOpenPicker = vi.fn();
+    renderComposer({ draft: "review this", onOpenPicker });
+    const input = screen.getByPlaceholderText("Message DSH…");
+    (input as HTMLTextAreaElement).setSelectionRange(6, 6);
+    fireEvent.select(input);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Attach files, folders, or images" }),
+    );
+    expect(onOpenPicker).toHaveBeenCalledWith(6);
+  });
+
+  it("stays disabled before DSH is ready while the draft remains editable", () => {
+    const onDraftChange = vi.fn();
+    renderComposer({ ready: false, draft: "", onDraftChange });
+    expect(
+      screen.getByRole("button", { name: "Attach files, folders, or images" }),
+    ).toBeDisabled();
+    const input = screen.getByPlaceholderText("Message DSH…");
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "draft before ready" } });
+    expect(onDraftChange).toHaveBeenCalledWith("draft before ready", 18);
   });
 });
 

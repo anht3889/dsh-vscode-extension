@@ -48,6 +48,9 @@ const PNG: EncodedImageAttachment = {
   name: "shot.png",
 };
 
+/** The picker only opens once the bridge is ready, so picker cases start here. */
+const readyState: UiState = { ...initialState, starting: false, ready: true };
+
 function askMsg(askId = "a1"): OutboundMessage {
   return { kind: "ask", askId, questions: [QUESTION] };
 }
@@ -275,8 +278,19 @@ describe("reduce", () => {
     expect(s.error).toBeUndefined();
   });
 
+  it("drafts before ready without opening or searching the picker", () => {
+    const typed = reduce(initialState, {
+      kind: "pickerOpened",
+      text: "read @",
+      token: { start: 5, end: 6, query: "", quoted: false },
+      requestId: "r1",
+    });
+    expect(typed.draft).toBe("read @");
+    expect(typed.picker).toBeUndefined();
+  });
+
   it("opens at an @ token and ignores stale search replies", () => {
-    const opened = reduce(initialState, {
+    const opened = reduce(readyState, {
       kind: "pickerOpened",
       text: "read @src",
       token: { start: 5, end: 9, query: "src", quoted: false },
@@ -297,7 +311,7 @@ describe("reduce", () => {
   });
 
   it("marks the current picker search unavailable", () => {
-    const opened = reduce(initialState, {
+    const opened = reduce(readyState, {
       kind: "pickerOpened",
       text: "@",
       token: { start: 0, end: 1, query: "", quoted: false },
@@ -314,7 +328,7 @@ describe("reduce", () => {
   });
 
   it("replaces only the tracked token when the picker query changes", () => {
-    const opened = reduce(initialState, {
+    const opened = reduce(readyState, {
       kind: "pickerOpened",
       text: "read @src and keep @docs",
       token: { start: 5, end: 9, query: "src", quoted: false },
@@ -337,7 +351,7 @@ describe("reduce", () => {
   });
 
   it("removes a lonely @ on dismiss but retains a typed token", () => {
-    const lonely = reduce(initialState, {
+    const lonely = reduce(readyState, {
       kind: "pickerOpened",
       text: "read @",
       token: { start: 5, end: 6, query: "", quoted: false },
@@ -354,7 +368,7 @@ describe("reduce", () => {
   });
 
   it("picks file and folder references by removing the trigger span", () => {
-    const opened = reduce(initialState, {
+    const opened = reduce(readyState, {
       kind: "pickerOpened",
       text: "read @src now",
       token: { start: 5, end: 9, query: "src", quoted: false },
@@ -394,13 +408,31 @@ describe("reduce", () => {
     });
     expect(spacedFolder.chips[2]).toMatchObject({
       path: "my folder",
-      mention: '@"my folder/',
+      mention: '@"my folder/"',
       label: "my folder",
     });
   });
 
+  it("closes the quote on a searched directory whose path has spaces", () => {
+    const opened = reduce(readyState, {
+      kind: "pickerOpened",
+      text: "read @my",
+      token: { start: 5, end: 8, query: "my", quoted: false },
+      requestId: "r1",
+    });
+    const picked = reduce(opened, {
+      kind: "referencePicked",
+      id: "c1",
+      item: { path: "my folder", kind: "directory" },
+    });
+    expect(picked.chips[0]).toMatchObject({
+      kind: "folder",
+      mention: '@"my folder/"',
+    });
+  });
+
   it("canonicalizes a picked reference from the tracked quote state", () => {
-    const opened = reduce(initialState, {
+    const opened = reduce(readyState, {
       kind: "pickerOpened",
       text: 'read @"src',
       token: { start: 5, end: 10, query: "src", quoted: true },
@@ -425,7 +457,7 @@ describe("reduce", () => {
   });
 
   it("retains the picker and reports an invalid picked path", () => {
-    const opened = reduce(initialState, {
+    const opened = reduce(readyState, {
       kind: "pickerOpened",
       text: "read @bad",
       token: { start: 5, end: 9, query: "bad", quoted: false },
@@ -558,6 +590,36 @@ describe("reduce", () => {
     expect(accepted.submitPending).toBe(false);
   });
 
+  it("keeps a submit pending through an unrelated error until turn start", () => {
+    const populated: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "look",
+    };
+    const pending = reduce(populated, { kind: "submitStarted" });
+    const unrelated = reduce(pending, statusMsg("error", "unknown model"));
+    expect(unrelated.submitPending).toBe(true);
+    expect(unrelated.draft).toBe("look");
+    expect(unrelated.error).toBe("unknown model");
+
+    const accepted = reduce(unrelated, eventMsg("turn/start", {}));
+    expect(accepted.submitPending).toBe(false);
+    expect(accepted.draft).toBe("");
+  });
+
+  it("unlocks a pending submit when the retained child disconnects", () => {
+    const pending = reduce(
+      { ...readyState, sessionId: "s1", draft: "look" },
+      { kind: "submitStarted" },
+    );
+    const disconnected = reduce(pending, {
+      kind: "hostDisconnected",
+      detail: "dsh exited",
+    });
+    expect(disconnected.submitPending).toBe(false);
+    expect(disconnected.draft).toBe("look");
+  });
+
   it("does not clear a pending submit on foreign-session turn start", () => {
     const pending: UiState = {
       ...initialState,
@@ -608,6 +670,7 @@ describe("composer helpers", () => {
     expect(
       serializeDraft({
         draft: "  review this  ",
+        picker: undefined,
         chips: [
           {
             id: "c1",
@@ -636,9 +699,72 @@ describe("composer helpers", () => {
     expect(
       serializeDraft({
         draft: " ",
+        picker: undefined,
         chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
       }),
     ).toEqual({ text: "", images: [PNG] });
-    expect(serializeDraft({ draft: "", chips: [] })).toEqual({ text: "" });
+    expect(
+      serializeDraft({ draft: "", picker: undefined, chips: [] }),
+    ).toEqual({ text: "" });
+  });
+
+  it("drops a partially typed trigger token when submit races the picker", () => {
+    expect(
+      serializeDraft({
+        draft: 'read @"src/my f',
+        chips: [
+          {
+            id: "c1",
+            kind: "file",
+            path: "src/a.ts",
+            mention: "@src/a.ts",
+            label: "a.ts",
+          },
+        ],
+        picker: {
+          requestId: "r1",
+          query: "src/my f",
+          quoted: true,
+          tokenStart: 5,
+          tokenEnd: 15,
+          items: [],
+          unavailable: false,
+        },
+      }),
+    ).toEqual({ text: "read @src/a.ts" });
+  });
+
+  it("drops a lonely trigger token and can leave the body empty", () => {
+    expect(
+      serializeDraft({
+        draft: "@",
+        chips: [],
+        picker: {
+          requestId: "r1",
+          query: "",
+          quoted: false,
+          tokenStart: 0,
+          tokenEnd: 1,
+          items: [],
+          unavailable: false,
+        },
+      }),
+    ).toEqual({ text: "" });
+
+    expect(
+      serializeDraft({
+        draft: "review @",
+        chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
+        picker: {
+          requestId: "r1",
+          query: "",
+          quoted: false,
+          tokenStart: 7,
+          tokenEnd: 8,
+          items: [],
+          unavailable: false,
+        },
+      }),
+    ).toEqual({ text: "review", images: [PNG] });
   });
 });

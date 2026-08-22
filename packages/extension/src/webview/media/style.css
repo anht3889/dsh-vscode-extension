@@ -295,6 +295,14 @@ body,
   background: var(--dsh-hover);
 }
 
+/* Keyboard reach into the result rows needs a visible cue; the host focus ring
+   only covers a:focus, input:focus, select:focus, and textarea:focus, and the
+   hover background alone does not follow keyboard focus. */
+.dsh-attachment-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--dsh-accent));
+  outline-offset: -1px;
+}
+
 .dsh-attachment-path {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -6,7 +6,7 @@ import type { ResolvableUserQuestionProvider } from "./user-questions.js";
 
 /** The front-controller hooks `dispatchCommand` routes inbound messages onto. */
 export interface CommandHooks {
-  /** Session command surface the dispatcher forwards protocol v2 messages onto. */
+  /** Session command surface the dispatcher forwards protocol v3 messages onto. */
   runner: SessionController;
   /** The user-questions provider that settles a pending ask by id. */
   provider: ResolvableUserQuestionProvider;

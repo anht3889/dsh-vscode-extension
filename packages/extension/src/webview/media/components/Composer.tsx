@@ -86,7 +86,11 @@ export function Composer({
   onRequestFullAccess,
 }: ComposerProps): JSX.Element {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const payload = serializeDraft({ draft, chips });
+  // A textarea the user has never interacted with reports selectionStart 0, so
+  // reading it would insert `@` in front of an existing draft. Track the caret
+  // the user actually placed and fall back to the end of the draft.
+  const caretRef = useRef<number | undefined>(undefined);
+  const payload = serializeDraft({ draft, chips, picker });
   const sendDisabled =
     !ready ||
     submitPending ||
@@ -148,9 +152,13 @@ export function Composer({
         rows={3}
         value={draft}
         placeholder="Message DSH…"
-        onChange={(e) =>
-          onDraftChange(e.target.value, e.target.selectionStart)
-        }
+        onChange={(e) => {
+          caretRef.current = e.target.selectionStart;
+          onDraftChange(e.target.value, e.target.selectionStart);
+        }}
+        onSelect={(e) => {
+          caretRef.current = e.currentTarget.selectionStart;
+        }}
         onKeyDown={onKeyDown}
       />
       <div className="dsh-composer-toolbar">
@@ -202,8 +210,13 @@ export function Composer({
             aria-label="Attach files, folders, or images"
             disabled={!ready}
             onClick={() => {
+              const caret = Math.min(
+                caretRef.current ?? draft.length,
+                draft.length,
+              );
               inputRef.current?.focus();
-              onOpenPicker(inputRef.current?.selectionStart ?? draft.length);
+              inputRef.current?.setSelectionRange(caret, caret);
+              onOpenPicker(caret);
             }}
           >
             <PlusIcon />

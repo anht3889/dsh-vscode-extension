@@ -50,7 +50,7 @@ describe("AttachmentPicker", () => {
     renderPicker({ items: [], unavailable: true });
     expect(screen.getByRole("button", { name: "Browse folders…" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Attach image…" })).toBeVisible();
-    expect(screen.getByText("File search unavailable.")).toBeVisible();
+    expect(screen.getByText("File search unavailable")).toBeVisible();
     expect(screen.queryByRole("option")).toBeNull();
   });
 

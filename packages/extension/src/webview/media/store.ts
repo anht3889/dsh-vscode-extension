@@ -14,13 +14,13 @@ import type {
   FolderPickedMessage,
   ImagesPickedMessage,
 } from "./vscode.js";
-import { formatFileMention } from "./fileMention.js";
+import { formatChipMention } from "./chipMention.js";
 
 // ---- webview UI state -------------------------------------------------------
 //
-// The reducer is pure and TDD'd (store.test.ts); the React components in this
-// directory are view-layer consumers wired but not unit-tested (typechecked only,
-// matching Task 8's panel.ts treatment).
+// The reducer is pure and owns every draft, picker, and chip transition
+// (store.test.ts). Components hold only presentation state; App.tsx mints the
+// non-deterministic values (request ids, chip ids) the reducer folds in.
 
 export interface ApprovalState {
   askId: string;
@@ -247,12 +247,23 @@ export function contextPercent(
   return Math.min(100, Math.round((100 * context.used) / context.window));
 }
 
-/** Build the next submit payload from the current body and attachment rail. */
+/**
+ * Build the next submit payload from the current body and attachment rail.
+ *
+ * An open picker's trigger token (`@`, `@sr`, `@"my f`) is an incomplete
+ * completion, not message text: submitting with the picker still open drops it
+ * rather than sending a dangling mention.
+ */
 export function serializeDraft(
-  state: Pick<UiState, "draft" | "chips">,
+  state: Pick<UiState, "draft" | "chips" | "picker">,
 ): { text: string; images?: EncodedImageAttachment[] } {
+  const body =
+    state.picker === undefined
+      ? state.draft
+      : state.draft.slice(0, state.picker.tokenStart) +
+        state.draft.slice(state.picker.tokenEnd);
   const text = [
-    state.draft.trim(),
+    body.trim(),
     ...state.chips
       .filter((chip): chip is ReferenceChip => chip.kind !== "image")
       .map((chip) => chip.mention),
@@ -288,6 +299,9 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       return { ...state, draft: msg.text };
 
     case "pickerOpened":
+      // Drafting works before the bridge is ready, but there is nothing to
+      // search: keep the typed text and leave the picker closed.
+      if (!state.ready) return { ...state, draft: msg.text };
       return {
         ...state,
         draft: msg.text,
@@ -341,7 +355,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
 
     case "referencePicked": {
       if (state.picker === undefined) return state;
-      const mention = formatFileMention(msg.item, state.picker.quoted);
+      const mention = formatChipMention(msg.item, state.picker.quoted);
       if (mention === undefined) {
         return {
           ...state,
@@ -372,10 +386,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
 
     case "folderPicked": {
       const path = msg.path.replace(/\/+$/, "");
-      const mention = formatFileMention(
-        { path, kind: "directory" },
-        false,
-      );
+      const mention = formatChipMention({ path, kind: "directory" }, false);
       if (mention === undefined) return state;
       return {
         ...state,
@@ -393,17 +404,14 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
     }
 
     case "imagesPicked": {
-      let nextState = state;
       const chips = [...state.chips];
       for (const image of msg.images) {
-        const id = nextChipId({ ...nextState, chips }, "image");
         chips.push({
-          id,
+          id: nextChipId({ ...state, chips }, "image"),
           kind: "image",
           image,
           label: image.name ?? "Image",
         });
-        nextState = { ...nextState, chips };
       }
       return { ...state, chips };
     }
@@ -510,13 +518,19 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
     case "status":
       // Surfaced (not silently swallowed): a crashed child or failed startup is
       // relayed as status:error and rendered by App as a visible error banner.
+      //
+      // Only `submit-rejected` answers the queued submit. An unrelated error
+      // (an unknown model, a failed permission switch) can arrive between the
+      // submit and its `turn/start`, so unlocking on it would let a second send
+      // duplicate the turn; the acknowledgement stays current-session
+      // `turn/start`, plus the `hostDisconnected` lifecycle path.
       if (msg.state === "error") {
         return {
           ...state,
           error: msg.detail ?? "DSH reported an error",
           starting: false,
           status: "error",
-          submitPending: false,
+          ...(msg.code === "submit-rejected" ? { submitPending: false } : {}),
         };
       }
       if (msg.state === "idle") {

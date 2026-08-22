@@ -1,6 +1,5 @@
 import { basename, extname, isAbsolute, relative, sep } from "node:path";
 import type { EncodedImageAttachment, ImageMediaType } from "@dsh-vscode/contract";
-import type * as vscode from "vscode";
 
 const IMAGE_MEDIA_TYPES: Readonly<Record<string, ImageMediaType>> = {
   ".png": "image/png",
@@ -59,11 +58,41 @@ export function encodeImageBytes(
   };
 }
 
-/** Read and encode an image selected through the VS Code extension host. */
-export async function encodeImage(
-  uri: vscode.Uri,
-): Promise<EncodedImageAttachment> {
-  const { workspace } = await import("vscode");
-  const bytes = await workspace.fs.readFile(uri);
-  return encodeImageBytes(bytes, uri.fsPath);
+/** The only member of a dialog selection this module reads. */
+export interface ImageSource {
+  fsPath: string;
+}
+
+/** Encoded images plus the base names that could not be read or typed. */
+export interface ImageSelection {
+  images: EncodedImageAttachment[];
+  failed: string[];
+}
+
+/**
+ * Encode every image in a dialog selection independently.
+ *
+ * The byte reader is injected (the panel passes `vscode.workspace.fs.readFile`)
+ * so this orchestration runs under unit test without the editor API.
+ * @param selected - dialog result; `undefined` means the user cancelled.
+ * @param readBytes - reads one selected file's bytes.
+ * @returns successes in selection order plus the base name of each failure.
+ */
+export async function encodeImageSelection<T extends ImageSource>(
+  selected: readonly T[] | undefined,
+  readBytes: (source: T) => Promise<Uint8Array>,
+): Promise<ImageSelection> {
+  const images: EncodedImageAttachment[] = [];
+  const failed: string[] = [];
+  for (const source of selected ?? []) {
+    try {
+      images.push(encodeImageBytes(await readBytes(source), source.fsPath));
+    } catch {
+      // Swallowed deliberately: the reason is either an unreadable file or an
+      // unsupported extension, and neither may reach the webview with its
+      // absolute path. The caller reports the base name instead.
+      failed.push(basename(source.fsPath));
+    }
+  }
+  return { images, failed };
 }

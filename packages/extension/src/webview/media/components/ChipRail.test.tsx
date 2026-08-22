@@ -43,33 +43,27 @@ describe("ChipRail", () => {
     expect(onRemove).toHaveBeenCalledWith("c1");
   });
 
-  it("creates and revokes an image thumbnail URL", () => {
-    Object.defineProperty(URL, "createObjectURL", {
-      configurable: true,
-      writable: true,
-      value: () => "blob:thumb",
-    });
-    Object.defineProperty(URL, "revokeObjectURL", {
-      configurable: true,
-      writable: true,
-      value: () => undefined,
-    });
-    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:thumb");
-    const revoke = vi.spyOn(URL, "revokeObjectURL");
-    const { unmount } = render(
-      <ChipRail chips={[imageChip]} onRemove={vi.fn()} />,
+  it("exposes the rail as a labelled list of chips", () => {
+    render(<ChipRail chips={[fileChip, imageChip]} onRemove={vi.fn()} />);
+    expect(screen.getByRole("list", { name: "Attachments" })).toBeVisible();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("renders an image thumbnail as a CSP-allowed data URI", () => {
+    render(<ChipRail chips={[imageChip]} onRemove={vi.fn()} />);
+    const thumb = screen.getByRole("img", { name: "shot.png" });
+    expect(thumb).toHaveAttribute("src", "data:image/png;base64,AQ==");
+    expect(thumb.getAttribute("src")).not.toMatch(/^blob:/);
+  });
+
+  it("titles an image chip with its base name only", () => {
+    render(
+      <ChipRail
+        chips={[{ ...imageChip, label: "shot.png" }]}
+        onRemove={vi.fn()}
+      />,
     );
-    expect(screen.getByRole("img", { name: "shot.png" })).toHaveAttribute(
-      "src",
-      "blob:thumb",
-    );
-    expect(screen.getByRole("img", { name: "shot.png" })).not.toHaveAttribute(
-      "title",
-      expect.stringContaining("/"),
-    );
-    unmount();
-    expect(revoke).toHaveBeenCalled();
-    create.mockRestore();
-    revoke.mockRestore();
+    const chip = screen.getByRole("listitem");
+    expect(chip).toHaveAttribute("title", "shot.png");
   });
 });

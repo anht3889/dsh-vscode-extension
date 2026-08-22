@@ -5,9 +5,11 @@ import type {
 } from "@dsh-vscode/contract";
 
 /**
- * A host-local command that never reaches the bridge. `cmd` carries either an
- * {@link InboundMessage} (forwarded to the bridge) or a host-only instruction
- * such as `{ kind: "apply" }` (apply accumulated diffs in the editor).
+ * The payload of one webview→extension command. Either an
+ * {@link InboundMessage}, which the panel forwards to the bridge unchanged, or
+ * a host-only instruction the panel handles itself and never forwards — editor
+ * edits (`apply`), modal confirmations, lifecycle (`webviewReady`), and the
+ * native attachment dialogs (`browseFolder`, `attachImage`).
  */
 export type UiCommandCmd =
   | InboundMessage

@@ -81,7 +81,7 @@ export function AttachmentPicker({
       </div>
       <div className="dsh-attachment-list" role="listbox" aria-label="Workspace files">
         {unavailable ? (
-          <div className="dsh-empty-state">File search unavailable.</div>
+          <div className="dsh-empty-state">File search unavailable</div>
         ) : null}
         {!unavailable && items.length === 0 ? (
           <div className="dsh-empty-state">No matching files</div>
