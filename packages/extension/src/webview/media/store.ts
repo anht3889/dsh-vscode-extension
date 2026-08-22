@@ -212,7 +212,6 @@ export function reduce(state: UiState, msg: OutboundMessage): UiState {
           ...state,
           error: msg.detail ?? "DSH reported an error",
           starting: false,
-          ready: false,
           status: "error",
         };
       }
