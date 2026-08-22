@@ -102,6 +102,19 @@ describe("reduce", () => {
     expect(ended.status).toBe("idle");
   });
 
+  it("keeps parent approval state across foreign-session turn events", () => {
+    const pending: UiState = {
+      ...reduce(initialState, askMsg("ask-1")),
+      sessionId: "parent",
+    };
+    const foreignEnd: OutboundMessage = {
+      kind: "event",
+      sessionId: "child",
+      event: { type: "turn/end", seq: 1, time: 1, data: {} },
+    };
+    expect(reduce(pending, foreignEnd)).toBe(pending);
+  });
+
   it("records tool/result diffs into diffs", () => {
     const s = reduce(
       initialState,

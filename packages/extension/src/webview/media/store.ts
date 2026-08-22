@@ -257,6 +257,12 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       return { ...state, status: msg.state };
 
     case "event": {
+      if (
+        state.sessionId !== undefined &&
+        msg.sessionId !== state.sessionId
+      ) {
+        return state;
+      }
       const type = msg.event.type;
       if (type === "turn/start") {
         return {

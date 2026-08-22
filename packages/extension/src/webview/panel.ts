@@ -21,6 +21,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private running: Running | undefined;
   private startingChild = false;
+  private startGeneration = 0;
   private status: DshState = "idle";
   private hello: HelloMessage | undefined;
   private pending: ToolDiff[] = [];
@@ -162,6 +163,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     }
     if (this.running || this.startingChild) return;
 
+    const generation = ++this.startGeneration;
     this.startingChild = true;
     this.view?.webview.postMessage({
       kind: "status",
@@ -170,6 +172,10 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     });
     try {
       const running = await this.pm.start(folder);
+      if (generation !== this.startGeneration) {
+        running.stop();
+        return;
+      }
       this.running = running;
       running.client.onMessage((m: OutboundMessage) => this.handleOutbound(m));
 
@@ -201,6 +207,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   async stop(): Promise<void> {
+    this.startGeneration += 1;
     const running = this.running;
     this.running = undefined;
     this.currentSessionId = undefined;
