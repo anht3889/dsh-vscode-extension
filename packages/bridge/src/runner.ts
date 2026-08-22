@@ -6,6 +6,7 @@ import {
   type AgentHandle,
   type ModelSelectionRef,
 } from "@deepseek-ai/dsh-agent";
+import type { AgentDefaultModelConfig } from "@deepseek-ai/dsh-agent-default-model";
 import { createUserMessage, type ContentBlock } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type {
@@ -37,37 +38,189 @@ const PRESET_LABELS: Record<string, string> = {
   "danger-full-access": "Full Access",
 };
 
-async function buildCatalog(ctx: Context, current: ModelRef): Promise<CatalogPayload> {
+/**
+ * What one read of the mounted providers found.
+ *
+ * `usable` is what the picker offers. `providers` and `advertised` exist to tell
+ * a model that a provider stopped listing apart from one it still lists but
+ * cannot resolve right now — a distinction {@link reconcileSelection} needs and
+ * `usable` alone cannot make, since both cases drop out of it.
+ */
+interface CatalogRead {
+  /** Models that resolved, in provider order. */
+  usable: ModelListItem[];
+  /** Ids of the currently mounted providers. */
+  providers: Set<string>;
+  /**
+   * Model ids per provider, for providers whose list was read successfully and
+   * came back non-empty. An absent entry carries no evidence about any model.
+   */
+  advertised: Map<string, readonly string[]>;
+}
+
+/**
+ * Read every mounted provider's model list once. A model that lists but fails to
+ * resolve (missing credentials, unreachable route) is recorded as advertised and
+ * omitted from `usable`, so it is never offered and never treated as retired.
+ *
+ * @param ctx - plugin context carrying the `llm` service.
+ * @returns the provider ids, their advertised model ids, and the usable models.
+ */
+async function readCatalog(ctx: Context): Promise<CatalogRead> {
+  const read: CatalogRead = {
+    usable: [],
+    providers: new Set(),
+    advertised: new Map(),
+  };
   const llm = ctx.get("llm");
-  const models: ModelListItem[] = [];
-  if (llm !== undefined) {
-    for (const providerInfo of llm.listProviders()) {
-      const provider = providerInfo.id;
-      for (const info of await llm.listModels(provider)) {
-        try {
-          const resolved = await llm.resolveModelInfo(provider, info.id);
-          models.push({
-            provider,
-            model: info.id,
-            label: info.name ?? info.id,
-            ...(resolved.context?.contextWindow !== undefined
-              ? { contextWindow: resolved.context.contextWindow }
-              : {}),
-          });
-        } catch {
-          // Unusable model (credentials/config): omit.
-        }
+  if (llm === undefined) return read;
+  for (const providerInfo of llm.listProviders()) {
+    const provider = providerInfo.id;
+    read.providers.add(provider);
+    let listed;
+    try {
+      listed = await llm.listModels(provider);
+    } catch {
+      // Route unreadable (discovery/credentials): no evidence about its models.
+      continue;
+    }
+    if (listed.length > 0) {
+      read.advertised.set(
+        provider,
+        listed.map((info) => info.id),
+      );
+    }
+    for (const info of listed) {
+      try {
+        const resolved = await llm.resolveModelInfo(provider, info.id);
+        read.usable.push({
+          provider,
+          model: info.id,
+          label: info.name ?? info.id,
+          ...(resolved.context?.contextWindow !== undefined
+            ? { contextWindow: resolved.context.contextWindow }
+            : {}),
+        });
+      } catch {
+        // Unusable model (credentials/config): omit.
       }
     }
   }
-  if (!models.some((m) => m.provider === current.provider && m.model === current.model)) {
-    models.unshift({
-      provider: current.provider,
-      model: current.model,
-      label: current.model,
-    });
-  }
-  return { current, models };
+  return read;
+}
+
+/** Whether `models` offers `ref`. */
+function offers(models: readonly ModelListItem[], ref: ModelRef): boolean {
+  return models.some((m) => m.provider === ref.provider && m.model === ref.model);
+}
+
+/**
+ * Whether `read` proves `saved` is gone: its provider is no longer mounted, or
+ * the provider listed models and `saved` was not among them. A provider that
+ * could not be read, or that listed nothing, proves nothing.
+ */
+function isRetired(read: CatalogRead, saved: ModelRef): boolean {
+  if (!read.providers.has(saved.provider)) return true;
+  const listed = read.advertised.get(saved.provider);
+  return listed !== undefined && !listed.includes(saved.model);
+}
+
+/**
+ * Assemble the catalog payload. A `current` the providers do not offer still
+ * needs an entry, because the picker has to show the model the agent runs on:
+ * {@link reconcileSelection} has already replaced the selections it could, so
+ * this covers a catalog that could not be read at all.
+ */
+function buildCatalog(
+  models: ModelListItem[],
+  current: ModelRef,
+): CatalogPayload {
+  if (offers(models, current)) return { current, models };
+  return {
+    current,
+    models: [
+      { provider: current.provider, model: current.model, label: current.model },
+      ...models,
+    ],
+  };
+}
+
+/** The catalog payload for `current` against a freshly read provider list. */
+async function catalogFor(
+  ctx: Context,
+  current: ModelRef,
+): Promise<CatalogPayload> {
+  return buildCatalog((await readCatalog(ctx)).usable, current);
+}
+
+/**
+ * The model a retired selection falls back to: the first usable model from the
+ * same provider when it still has one (a provider whose model list was edited
+ * keeps its credentials and base URL), otherwise the first usable model in the
+ * catalog. Undefined when nothing is usable.
+ */
+function replacementFor(
+  models: readonly ModelListItem[],
+  stale: ModelRef,
+): ModelRef | undefined {
+  const chosen = models.find((m) => m.provider === stale.provider) ?? models[0];
+  return chosen === undefined
+    ? undefined
+    : { provider: chosen.provider, model: chosen.model };
+}
+
+/**
+ * Reconcile the saved default selection against the providers, returning the
+ * selection the runner starts from.
+ *
+ * `agentDefaultModel` stores a selection without validating catalog membership
+ * and leaves availability diagnostics to its consumer, so a model dropped from a
+ * provider's list outlives that edit in user settings. Unreconciled it reaches
+ * the picker as an ordinary selectable entry that no request can open. The
+ * replacement is persisted so the next launch starts from a live model.
+ *
+ * Replacement requires positive evidence that the model is gone (see
+ * {@link isRetired}) and a usable model to move to. A provider that is merely
+ * unreachable or unreadable keeps its selection: providers legitimately serve
+ * unadvertised ids, and a transient outage must not rewrite a saved choice.
+ *
+ * @param defaultModel - default-model service holding the saved selection.
+ * @param read - one read of the mounted providers.
+ * @param saved - selection read from `defaultModel`.
+ * @returns the saved selection, or its replacement once persisted.
+ */
+async function reconcileSelection(
+  defaultModel: AgentDefaultModelConfig,
+  read: CatalogRead,
+  saved: ModelRef,
+): Promise<ModelRef> {
+  if (offers(read.usable, saved) || !isRetired(read, saved)) return saved;
+  const replacement = replacementFor(read.usable, saved);
+  if (replacement === undefined) return saved;
+  await defaultModel.saveSelection(replacement);
+  process.stderr.write(
+    `model ${saved.provider}/${saved.model} is no longer advertised; ` +
+      `switched to ${replacement.provider}/${replacement.model}\n`,
+  );
+  return replacement;
+}
+
+/**
+ * Read the providers and reconcile the saved default selection against them.
+ *
+ * @param ctx - plugin context carrying the `llm` service.
+ * @param defaultModel - default-model service holding the saved selection.
+ * @returns the selection a new Agent should start from.
+ */
+export async function startupSelection(
+  ctx: Context,
+  defaultModel: AgentDefaultModelConfig,
+): Promise<ModelRef> {
+  return reconcileSelection(
+    defaultModel,
+    await readCatalog(ctx),
+    defaultModel.currentSelection(),
+  );
 }
 
 function buildPermissions(ctx: Context, session: Session): PermissionsPayload {
@@ -195,7 +348,7 @@ export async function runVscode(
     throw new Error("runner: required services (agents/agentDefaultModel/sessions) are not mounted");
   }
 
-  const selection = defaultModel.currentSelection();
+  const selection = await startupSelection(ctx, defaultModel);
 
   // Relay the session firehose before creation so nothing — turn/start through
   // turn/end — is missed.
@@ -280,7 +433,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     throw new Error("runner: required services (agents/agentDefaultModel/sessions) are not mounted");
   }
 
-  const selection = defaultModel.currentSelection();
+  const selection = await startupSelection(ctx, defaultModel);
   type LiveSelectionRef = ModelSelectionRef & { current: ModelRef };
 
   const initialSelectionRef: LiveSelectionRef = {
@@ -351,7 +504,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     includeHistory: boolean,
   ): Promise<void> => {
     const { session } = current.handle.agent;
-    const catalog = await buildCatalog(ctx, current.selectionRef.current);
+    const catalog = await catalogFor(ctx, current.selectionRef.current);
     current.catalog = catalog;
     const permissions = buildPermissions(ctx, session);
     const window = catalog.models.find(
@@ -440,7 +593,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const emitContext = async (): Promise<void> => {
     const catalog =
-      live.catalog ?? (await buildCatalog(ctx, live.selectionRef.current));
+      live.catalog ?? (await catalogFor(ctx, live.selectionRef.current));
     live.catalog = catalog;
     const window = catalog.models.find(
       (model) =>
@@ -461,7 +614,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       provider: resolved.provider,
       model: resolved.model,
     };
-    const catalog = await buildCatalog(ctx, selected);
+    const catalog = await catalogFor(ctx, selected);
     live.selectionRef.current = {
       ...live.selectionRef.current,
       ...selected,
@@ -522,7 +675,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
             sendError(error);
             const catalog =
               live.catalog ??
-              (await buildCatalog(ctx, live.selectionRef.current));
+              (await catalogFor(ctx, live.selectionRef.current));
             live.catalog = catalog;
             io.send({ kind: "catalog", ...catalog });
           }
@@ -764,7 +917,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       } catch (error) {
         sendError(error);
         const catalog =
-          live.catalog ?? (await buildCatalog(ctx, live.selectionRef.current));
+          live.catalog ?? (await catalogFor(ctx, live.selectionRef.current));
         live.catalog = catalog;
         io.send({ kind: "catalog", ...catalog });
       }

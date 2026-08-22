@@ -15,7 +15,14 @@ image URL would let model output make a request. Injected context messages
 The chat header exposes workspace-scoped recent sessions and New Chat. The
 squircle composer selects the current session's permission preset and model,
 shows next-request context usage, and sends with Enter (Shift+Enter inserts a
-newline). Plus, left of the context meter, opens a workspace file and folder
+newline). The model list offers what the mounted providers list and can resolve.
+DSH stores a default selection without checking it against any provider, so a
+model dropped from a provider's config would otherwise stay in the list as an
+entry no request can open: at startup the bridge replaces such a selection with
+a live model from the same provider where possible, saves the replacement, and
+notes the switch on stderr. A provider that is only unreachable or unreadable
+keeps its selection — providers may serve ids they do not list, and an outage
+must not rewrite a saved choice. Plus, left of the context meter, opens a workspace file and folder
 search plus a native Attach image action. File and folder chips are sent as
 `@path` references; DSH reads their contents only when needed.
 Image chips depend on the selected model declaring image input and on DSH

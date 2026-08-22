@@ -22,6 +22,12 @@ export interface BootOptions {
   provider: string;
   model: string;
   persistenceRoot?: string;
+  /**
+   * Model ids the DeepSeek adapter advertises. Defaults to `[model]`; pass a
+   * list that omits `model` to reproduce a saved default that its provider no
+   * longer advertises.
+   */
+  catalogModels?: string[];
 }
 
 /**
@@ -64,7 +70,10 @@ export async function bootTree(opts: BootOptions): Promise<Context> {
     {
       baseURL: opts.baseURL,
       apiKeyEnv: "DEEPSEEK_API_KEY",
-      models: [{ id: opts.model, contextWindow: 128_000 }],
+      models: (opts.catalogModels ?? [opts.model]).map((id) => ({
+        id,
+        contextWindow: 128_000,
+      })),
     },
   );
 
