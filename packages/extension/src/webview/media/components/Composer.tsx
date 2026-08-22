@@ -32,6 +32,7 @@ interface ComposerProps {
   onRemoveChip(id: string): void;
   onBrowseFolder(): void;
   onAttachImage(): void;
+  focusPickerSearch: boolean;
   onSubmit(): void;
   onCancel(): void;
   onSelectModel(provider: string, model: string): void;
@@ -77,6 +78,7 @@ export function Composer({
   onRemoveChip,
   onBrowseFolder,
   onAttachImage,
+  focusPickerSearch,
   onSubmit,
   onCancel,
   onSelectModel,
@@ -134,6 +136,7 @@ export function Composer({
           onBrowseFolder={onBrowseFolder}
           onAttachImage={onAttachImage}
           onDismiss={onDismissPicker}
+          autoFocus={focusPickerSearch}
         />
       ) : null}
       {chips.length > 0 ? (

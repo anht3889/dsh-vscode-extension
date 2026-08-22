@@ -94,4 +94,14 @@ describe("AttachmentPicker", () => {
     renderPicker({ items: [] });
     expect(screen.getByText("No matching files")).toBeVisible();
   });
+
+  it("does not steal focus when autoFocus is false", () => {
+    renderPicker({ autoFocus: false });
+    expect(screen.getByLabelText("Search files and folders")).not.toHaveFocus();
+  });
+
+  it("focuses the search field when autoFocus is requested", () => {
+    renderPicker({ autoFocus: true });
+    expect(screen.getByLabelText("Search files and folders")).toHaveFocus();
+  });
 });

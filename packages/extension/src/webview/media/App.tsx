@@ -40,6 +40,7 @@ function tokenAt(
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(reduce, initialState);
   const [recentOpen, setRecentOpen] = useState(false);
+  const [focusPickerSearch, setFocusPickerSearch] = useState(false);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>): void => {
@@ -91,6 +92,7 @@ export function App(): JSX.Element {
           dispatch({ kind: "draftChanged", text });
           return;
         }
+        setFocusPickerSearch(false);
         dispatch({
           kind: "pickerOpened",
           text,
@@ -100,6 +102,7 @@ export function App(): JSX.Element {
         return;
       }
       if (token === undefined) {
+        setFocusPickerSearch(false);
         dispatch({ kind: "draftChanged", text });
         dispatch({ kind: "pickerDismissed" });
         return;
@@ -124,6 +127,7 @@ export function App(): JSX.Element {
         dispatch({ kind: "draftChanged", text });
         return;
       }
+      setFocusPickerSearch(false);
       dispatch({
         kind: "pickerOpened",
         text,
@@ -136,6 +140,7 @@ export function App(): JSX.Element {
 
   const onOpenPicker = useCallback(
     (selectionStart: number): void => {
+      setFocusPickerSearch(true);
       const existing = tokenAt(state.draft, selectionStart);
       if (existing !== undefined) {
         dispatch({
@@ -171,6 +176,7 @@ export function App(): JSX.Element {
   }, []);
 
   const onPickReference = useCallback((item: FileReferenceItem): void => {
+    setFocusPickerSearch(false);
     dispatch({
       kind: "referencePicked",
       id: crypto.randomUUID(),
@@ -179,6 +185,7 @@ export function App(): JSX.Element {
   }, []);
 
   const onDismissPicker = useCallback((): void => {
+    setFocusPickerSearch(false);
     dispatch({ kind: "pickerDismissed" });
   }, []);
 
@@ -187,11 +194,13 @@ export function App(): JSX.Element {
   }, []);
 
   const onBrowseFolder = useCallback((): void => {
+    setFocusPickerSearch(false);
     dispatch({ kind: "pickerDismissed" });
     post({ kind: "browseFolder" });
   }, [post]);
 
   const onAttachImage = useCallback((): void => {
+    setFocusPickerSearch(false);
     dispatch({ kind: "pickerDismissed" });
     post({ kind: "attachImage" });
   }, [post]);
@@ -256,6 +265,7 @@ export function App(): JSX.Element {
         chips={state.chips}
         picker={state.picker}
         submitPending={state.submitPending}
+        focusPickerSearch={focusPickerSearch}
         onDraftChange={onDraftChange}
         onOpenPicker={onOpenPicker}
         onPickerQuery={onPickerQuery}

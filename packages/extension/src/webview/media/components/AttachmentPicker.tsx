@@ -10,6 +10,7 @@ export interface AttachmentPickerProps {
   onBrowseFolder(): void;
   onAttachImage(): void;
   onDismiss(): void;
+  autoFocus?: boolean;
 }
 
 export function AttachmentPicker({
@@ -21,6 +22,7 @@ export function AttachmentPicker({
   onBrowseFolder,
   onAttachImage,
   onDismiss,
+  autoFocus = false,
 }: AttachmentPickerProps): JSX.Element {
   const root = useRef<HTMLDivElement>(null);
 
@@ -58,7 +60,7 @@ export function AttachmentPicker({
         value={query}
         placeholder="Search files and folders"
         aria-label="Search files and folders"
-        autoFocus
+        autoFocus={autoFocus}
         onChange={(event) => onQuery(event.target.value)}
       />
       <div className="dsh-attachment-actions">
