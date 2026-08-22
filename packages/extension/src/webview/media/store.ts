@@ -102,22 +102,27 @@ function assistantText(data: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Extract a render-ready diff from a `tool/result` event's `data.meta` when it
- * carries a `{ path, oldText, newText }` shape (dsh-tool-fs / str-replace-editor).
- * Returns undefined for non-diff metas (best-effort, no hard dep on dsh-tool-fs).
+ * Extract a render-ready diff record from tool result metadata or arguments.
  */
-function diffFromMeta(data: Record<string, unknown>): ToolDiff | undefined {
-  const meta = data.meta;
-  if (typeof meta !== "object" || meta === null) return undefined;
-  const m = meta as Record<string, unknown>;
+function diffFromRecord(value: unknown): ToolDiff | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
   if (
-    typeof m.path === "string" &&
-    typeof m.oldText === "string" &&
-    typeof m.newText === "string"
+    typeof record.path === "string" &&
+    typeof record.oldText === "string" &&
+    typeof record.newText === "string"
   ) {
-    return { path: m.path, oldText: m.oldText, newText: m.newText };
+    return {
+      path: record.path,
+      oldText: record.oldText,
+      newText: record.newText,
+    };
   }
   return undefined;
+}
+
+function diffFromEventData(data: Record<string, unknown>): ToolDiff | undefined {
+  return diffFromRecord(data.meta) ?? diffFromRecord(data.arguments);
 }
 
 function eventText(event: SessionEventWire): string | undefined {
@@ -283,7 +288,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         return state;
       }
       if (type === "tool/result") {
-        const diff = diffFromMeta(msg.event.data);
+        const diff = diffFromEventData(msg.event.data);
         if (diff !== undefined) {
           return { ...state, diffs: [...state.diffs, diff] };
         }

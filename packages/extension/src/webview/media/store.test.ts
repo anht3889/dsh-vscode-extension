@@ -130,6 +130,18 @@ describe("reduce", () => {
     expect(s.diffs).toEqual([]);
   });
 
+  it("renders argument-only diffs that the host can apply", () => {
+    const s = reduce(
+      initialState,
+      eventMsg("tool/result", {
+        arguments: { path: "/x/a.ts", oldText: "a", newText: "b" },
+      }),
+    );
+    expect(s.diffs).toEqual([
+      { path: "/x/a.ts", oldText: "a", newText: "b" },
+    ]);
+  });
+
   it("preserves chat history and resets diffs on turn/start", () => {
     const withText = reduce(initialState, assistantMessage("previous turn"));
     const withDiffs = reduce(
