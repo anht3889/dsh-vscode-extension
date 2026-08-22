@@ -64,8 +64,10 @@ body,
   gap: 3px;
 }
 
+/* Deliberately not a positioning context: the popover it owns is anchored to
+   the header so it can span the panel instead of overflowing past the panel's
+   left edge when measured from this button. */
 .dsh-recent-owner {
-  position: relative;
   display: flex;
 }
 
@@ -109,11 +111,16 @@ body,
   }
 }
 
+/* Anchored to `.dsh-header`, inset from both panel edges so no width can clip:
+   `max-width` caps it on a wide sidebar and `margin-left: auto` keeps the
+   remaining slack on the left, holding it under the button that opens it. */
 .dsh-recent-popover {
   position: absolute;
   top: calc(100% + 4px);
-  right: 0;
-  width: min(300px, calc(100vw - 16px));
+  left: 8px;
+  right: 8px;
+  max-width: 420px;
+  margin-left: auto;
   padding: 8px;
   border: 1px solid var(--dsh-border);
   border-radius: 12px;
