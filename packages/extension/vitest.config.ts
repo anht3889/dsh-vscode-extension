@@ -6,6 +6,11 @@ import { defineConfig } from "vitest/config";
 // (src/**/*.test.ts and test/**/*.test.ts) untouched.
 export default defineConfig({
   test: {
-    exclude: ["**/node_modules/**", "src/test/**"],
+    exclude: [
+      "**/node_modules/**",
+      ".vscode-test/**",
+      "dist-test/**",
+      "src/test/**",
+    ],
   },
 });
