@@ -8,7 +8,7 @@ import type { ProtocolClient } from "../protocolClient.js";
 import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
 import { nextStatus, type DshState } from "../statusBar.js";
-import { encodeImage, relativeFolderPath } from "./attachments.js";
+import { encodeImage, pickRelativeFolder } from "./attachments.js";
 import type {
   FolderPickedMessage,
   ImagesPickedMessage,
@@ -120,17 +120,19 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   private async browseFolder(): Promise<void> {
-    const cwd = this.readyCwd ?? this.hello?.cwd;
-    if (cwd === undefined) return;
-    const selected = await vscode.window.showOpenDialog({
-      canSelectFiles: false,
-      canSelectFolders: true,
-      canSelectMany: false,
-    });
-    const uri = selected?.[0];
-    if (uri === undefined) return;
-    const path = relativeFolderPath(cwd, uri.fsPath);
-    if (path === undefined) {
+    const result = await pickRelativeFolder(
+      async () => {
+        const selected = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+        });
+        return selected?.[0]?.fsPath;
+      },
+      () => this.readyCwd ?? this.hello?.cwd,
+    );
+    if (result.kind === "cancelled" || result.kind === "unavailable") return;
+    if (result.kind === "outside") {
       this.view?.webview.postMessage({
         kind: "status",
         state: "error",
@@ -138,7 +140,10 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
-    const message: FolderPickedMessage = { kind: "folderPicked", path };
+    const message: FolderPickedMessage = {
+      kind: "folderPicked",
+      path: result.path,
+    };
     this.view?.webview.postMessage(message);
   }
 

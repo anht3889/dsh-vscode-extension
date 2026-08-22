@@ -23,6 +23,25 @@ export function relativeFolderPath(
   return path.replaceAll("\\", "/");
 }
 
+export type FolderPickResult =
+  | { kind: "cancelled" }
+  | { kind: "unavailable" }
+  | { kind: "outside" }
+  | { kind: "picked"; path: string };
+
+/** Select a folder, then validate it against the workspace current at that time. */
+export async function pickRelativeFolder(
+  pickFolder: () => Promise<string | undefined>,
+  getCwd: () => string | undefined,
+): Promise<FolderPickResult> {
+  const selected = await pickFolder();
+  if (selected === undefined) return { kind: "cancelled" };
+  const cwd = getCwd();
+  if (cwd === undefined) return { kind: "unavailable" };
+  const path = relativeFolderPath(cwd, selected);
+  return path === undefined ? { kind: "outside" } : { kind: "picked", path };
+}
+
 /** Encode image bytes for the bridge while exposing only the file's base name. */
 export function encodeImageBytes(
   bytes: Uint8Array,

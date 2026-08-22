@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   encodeImageBytes,
+  pickRelativeFolder,
   relativeFolderPath,
 } from "../src/webview/attachments.js";
 
@@ -13,6 +14,22 @@ describe("relativeFolderPath", () => {
 
   it("rejects paths that only share the cwd prefix", () => {
     expect(relativeFolderPath("/work/app", "/work/app2")).toBeUndefined();
+  });
+});
+
+describe("pickRelativeFolder", () => {
+  it("validates against the cwd current after the picker resolves", async () => {
+    let cwd = "/work/old";
+
+    const result = await pickRelativeFolder(
+      async () => {
+        cwd = "/work/new";
+        return "/work/old/src";
+      },
+      () => cwd,
+    );
+
+    expect(result).toEqual({ kind: "outside" });
   });
 });
 
