@@ -26,12 +26,12 @@ describe("createStdio", () => {
     const io = createStdio({ stdin } as any);
     const got: InboundMessage[] = [];
     io.onCommand((m) => got.push(m));
-    stdin.write('{"kind":"submit","task"');
+    stdin.write('{"kind":"submit","text"');
     stdin.write(':"hi"}\n');
     await new Promise((r) => setImmediate(r));
     expect(got).toHaveLength(1);
     expect((got[0] as any).kind).toBe("submit");
-    expect((got[0] as any).task).toBe("hi");
+    expect((got[0] as any).text).toBe("hi");
   });
   it("reports disconnect once when stdin ends, and to late subscribers", async () => {
     const stdin = new PassThrough();
