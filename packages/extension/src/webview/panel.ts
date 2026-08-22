@@ -229,7 +229,11 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     }
 
     // Accumulate diffs from tool/result events (cleared on the next turn/start).
-    if (m.kind === "event") {
+    if (
+      m.kind === "event" &&
+      (this.currentSessionId === undefined ||
+        m.sessionId === this.currentSessionId)
+    ) {
       if (m.event.type === "turn/start") this.pending = [];
       if (m.event.type === "tool/result") {
         this.pending.push(...diffsFromEvent(m.event));
