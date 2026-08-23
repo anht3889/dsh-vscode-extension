@@ -2,11 +2,23 @@ import React, {
   useCallback,
   useEffect,
   useReducer,
+  useRef,
   useState,
 } from "react";
-import type { AskAnswerWire, FileReferenceItem } from "@dsh-vscode/contract";
-import { reduce, initialState, serializeDraft, type UiMessage } from "./store.js";
+import type {
+  AskAnswerWire,
+  FileReferenceItem,
+  SlashMenuItem,
+} from "@dsh-vscode/contract";
+import {
+  reduce,
+  initialState,
+  serializeCommand,
+  serializeDraft,
+  type UiMessage,
+} from "./store.js";
 import { activeAtToken } from "./fileMention.js";
+import { activeSlashToken, replaceSlashToken } from "./slashToken.js";
 import { Composer } from "./components/Composer.js";
 import { StreamView } from "./components/StreamView.js";
 import { ApprovalBanner } from "./components/ApprovalBanner.js";
@@ -37,10 +49,27 @@ function tokenAt(
   };
 }
 
+function sameSlashToken(
+  left: ReturnType<typeof activeSlashToken>,
+  right: ReturnType<typeof activeSlashToken>,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.start === right.start &&
+    left.end === right.end &&
+    left.query === right.query &&
+    left.position === right.position
+  );
+}
+
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(reduce, initialState);
   const [recentOpen, setRecentOpen] = useState(false);
   const [focusPickerSearch, setFocusPickerSearch] = useState(false);
+  const caretRef = useRef(0);
+  const draftRef = useRef(state.draft);
+  draftRef.current = state.draft;
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>): void => {
@@ -66,12 +95,15 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     const picker = state.picker;
-    if (picker !== undefined) {
+    if (picker?.kind === "attachment") {
       post({
         kind: "listFileReferences",
         query: picker.query,
         requestId: picker.requestId,
       });
+    }
+    if (picker?.kind === "slash") {
+      post({ kind: "listSlashItems", requestId: picker.requestId });
     }
   }, [post, state.picker?.requestId]);
 
@@ -84,58 +116,91 @@ export function App(): JSX.Element {
   );
   const apply = useCallback((): void => post({ kind: "apply" }), [post]);
 
-  const onDraftChange = useCallback(
+  const arbitrateDraft = useCallback(
     (text: string, selectionStart: number): void => {
-      const token = tokenAt(text, selectionStart);
-      if (state.picker === undefined) {
-        if (token === undefined) {
-          dispatch({ kind: "draftChanged", text });
-          return;
+      const attachment = tokenAt(text, selectionStart);
+      const slash =
+        attachment === undefined
+          ? activeSlashToken(text, selectionStart)
+          : undefined;
+      const picker = state.picker;
+
+      if (attachment !== undefined) {
+        setFocusPickerSearch(false);
+        if (
+          picker?.kind === "attachment" &&
+          attachment.quoted === picker.quoted &&
+          attachment.start === picker.tokenStart
+        ) {
+          if (attachment.query === picker.query) {
+            dispatch({ kind: "draftChanged", text });
+          } else {
+            dispatch({
+              kind: "pickerQueryChanged",
+              query: attachment.query,
+              requestId: crypto.randomUUID(),
+            });
+          }
+        } else {
+          dispatch({
+            kind: "pickerOpened",
+            text,
+            token: attachment,
+            requestId: crypto.randomUUID(),
+          });
         }
+        return;
+      }
+
+      if (slash !== undefined) {
+        setFocusPickerSearch(false);
+        if (
+          picker?.kind === "slash" &&
+          slash.start === picker.token.start
+        ) {
+          dispatch({ kind: "slashTokenChanged", text, token: slash });
+        } else {
+          dispatch({
+            kind: "slashPickerOpened",
+            text,
+            token: slash,
+            requestId: crypto.randomUUID(),
+          });
+        }
+        return;
+      }
+
+      dispatch({ kind: "draftChanged", text });
+      if (picker !== undefined) {
         setFocusPickerSearch(false);
         dispatch({
-          kind: "pickerOpened",
-          text,
-          token,
-          requestId: crypto.randomUUID(),
+          kind:
+            picker.kind === "attachment"
+              ? "pickerDismissed"
+              : "slashPickerDismissed",
         });
-        return;
       }
-      if (token === undefined) {
-        setFocusPickerSearch(false);
-        dispatch({ kind: "draftChanged", text });
-        dispatch({ kind: "pickerDismissed" });
-        return;
-      }
-      if (
-        token.quoted === state.picker.quoted &&
-        token.start === state.picker.tokenStart &&
-        token.query !== state.picker.query
-      ) {
-        dispatch({
-          kind: "pickerQueryChanged",
-          query: token.query,
-          requestId: crypto.randomUUID(),
-        });
-        return;
-      }
-      if (
-        token.quoted === state.picker.quoted &&
-        token.start === state.picker.tokenStart &&
-        token.query === state.picker.query
-      ) {
-        dispatch({ kind: "draftChanged", text });
-        return;
-      }
-      setFocusPickerSearch(false);
-      dispatch({
-        kind: "pickerOpened",
-        text,
-        token,
-        requestId: crypto.randomUUID(),
-      });
     },
     [state.picker],
+  );
+
+  const onDraftChange = useCallback(
+    (text: string, selectionStart: number): void => {
+      caretRef.current = selectionStart;
+      draftRef.current = text;
+      arbitrateDraft(text, selectionStart);
+    },
+    [arbitrateDraft],
+  );
+
+  const onCaretChange = useCallback(
+    (text: string, selectionStart: number): void => {
+      caretRef.current = selectionStart;
+      if (state.picker?.kind === "slash") {
+        arbitrateDraft(text, selectionStart);
+      }
+    },
+    [arbitrateDraft, state.picker?.kind],
   );
 
   const onOpenPicker = useCallback(
@@ -184,10 +249,45 @@ export function App(): JSX.Element {
     });
   }, []);
 
+  const onPickSlashItem = useCallback(
+    (item: SlashMenuItem): number | undefined => {
+      if (state.picker?.kind !== "slash") return undefined;
+      const currentToken =
+        tokenAt(state.draft, caretRef.current) === undefined
+          ? activeSlashToken(state.draft, caretRef.current)
+          : undefined;
+      if (
+        draftRef.current !== state.draft ||
+        !sameSlashToken(currentToken, state.picker.token)
+      ) {
+        return undefined;
+      }
+      const replacement =
+        item.behavior === "execute" ? "" : `/${item.name} `;
+      const result = replaceSlashToken(
+        state.draft,
+        state.picker.token,
+        replacement,
+      );
+      dispatch({ kind: "slashItemPicked", item });
+      if (item.behavior === "execute") {
+        post({ kind: "executeSlashCommand", line: `/${item.name}` });
+        return undefined;
+      }
+      return result.caret;
+    },
+    [post, state.draft, state.picker],
+  );
+
   const onDismissPicker = useCallback((): void => {
     setFocusPickerSearch(false);
-    dispatch({ kind: "pickerDismissed" });
-  }, []);
+    dispatch({
+      kind:
+        state.picker?.kind === "slash"
+          ? "slashPickerDismissed"
+          : "pickerDismissed",
+    });
+  }, [state.picker?.kind]);
 
   const onRemoveChip = useCallback((id: string): void => {
     dispatch({ kind: "chipRemoved", id });
@@ -200,9 +300,24 @@ export function App(): JSX.Element {
   }, [post]);
 
   const onSubmit = useCallback((): void => {
-    const payload = serializeDraft(state);
+    const command = serializeCommand(state);
+    if (command !== undefined) {
+      if (
+        command.images !== undefined &&
+        !state.commandClaim?.acceptsImages
+      ) {
+        dispatch({
+          kind: "localError",
+          detail: `/${state.commandClaim?.name} does not accept images`,
+        });
+        return;
+      }
+      dispatch({ kind: "commandSubmitStarted", line: command.line });
+      post({ kind: "executeSlashCommand", ...command });
+      return;
+    }
     dispatch({ kind: "submitStarted" });
-    post({ kind: "submit", ...payload });
+    post({ kind: "submit", ...serializeDraft(state) });
   }, [post, state]);
 
   return (
@@ -262,12 +377,18 @@ export function App(): JSX.Element {
         draft={state.draft}
         chips={state.chips}
         picker={state.picker}
+        commandClaim={state.commandClaim}
         submitPending={state.submitPending}
         focusPickerSearch={focusPickerSearch}
         onDraftChange={onDraftChange}
+        onCaretChange={onCaretChange}
         onOpenPicker={onOpenPicker}
         onPickerQuery={onPickerQuery}
         onPickReference={onPickReference}
+        onMoveSlashHighlight={(delta) =>
+          dispatch({ kind: "slashHighlightMoved", delta })
+        }
+        onPickSlashItem={onPickSlashItem}
         onDismissPicker={onDismissPicker}
         onRemoveChip={onRemoveChip}
         onAttachImage={onAttachImage}

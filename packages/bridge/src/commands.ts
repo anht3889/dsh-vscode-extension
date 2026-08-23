@@ -6,7 +6,7 @@ import type { ResolvableUserQuestionProvider } from "./user-questions.js";
 
 /** The front-controller hooks `dispatchCommand` routes inbound messages onto. */
 export interface CommandHooks {
-  /** Session command surface the dispatcher forwards protocol v3 messages onto. */
+  /** Session command surface the dispatcher forwards protocol v4 messages onto. */
   runner: SessionController;
   /** The user-questions provider that settles a pending ask by id. */
   provider: ResolvableUserQuestionProvider;
@@ -77,6 +77,12 @@ export function dispatchCommand(
       return;
     case "listFileReferences":
       hooks.runner.listFileReferences(msg.query, msg.requestId);
+      return;
+    case "listSlashItems":
+      hooks.runner.listSlashItems(msg.requestId);
+      return;
+    case "executeSlashCommand":
+      hooks.runner.executeSlashCommand(msg.line, msg.images);
       return;
     case "exit":
       return;

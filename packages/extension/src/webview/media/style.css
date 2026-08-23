@@ -438,6 +438,88 @@ body,
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
+.dsh-slash-picker {
+  position: absolute;
+  inset-inline: 8px;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  box-sizing: border-box;
+  max-width: calc(100% - 16px);
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  border: 1px solid var(--vscode-editorWidget-border, var(--dsh-border));
+  border-radius: 10px;
+  background: var(--vscode-editorWidget-background, var(--dsh-bg));
+  color: var(--vscode-editorWidget-foreground, var(--dsh-fg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.dsh-slash-group {
+  padding: 4px;
+}
+
+.dsh-slash-group + .dsh-slash-group {
+  border-top: 1px solid var(--vscode-editorWidget-border, var(--dsh-border));
+}
+
+.dsh-slash-group-title,
+.dsh-slash-diagnostic,
+.dsh-command-claim-hint {
+  color: var(--vscode-descriptionForeground, var(--dsh-muted));
+  font-size: 11px;
+}
+
+.dsh-slash-group-title {
+  padding: 3px 6px;
+  font-weight: 600;
+}
+
+.dsh-slash-diagnostic {
+  padding: 7px 10px;
+}
+
+.dsh-slash-option {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dsh-slash-option:hover {
+  background: var(--vscode-list-hoverBackground, var(--dsh-hover));
+  color: var(--vscode-list-hoverForeground, inherit);
+}
+
+.dsh-slash-option[aria-selected="true"] {
+  background: var(--vscode-list-activeSelectionBackground, var(--dsh-accent));
+  color: var(--vscode-list-activeSelectionForeground, white);
+}
+
+.dsh-slash-name,
+.dsh-slash-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh-slash-name {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.dsh-slash-description {
+  min-width: 0;
+  opacity: 0.8;
+}
+
 .dsh-attachment-search {
   box-sizing: border-box;
   width: 100%;
@@ -568,6 +650,10 @@ body,
   outline: none;
   padding: 2px 3px;
   font-family: inherit;
+}
+
+.dsh-command-claim-hint {
+  padding: 0 3px;
 }
 
 .dsh-composer-toolbar {

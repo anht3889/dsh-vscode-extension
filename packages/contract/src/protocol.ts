@@ -1,6 +1,6 @@
 import type { SessionEventWire } from "./events.js";
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export type ImageMediaType =
   | "image/png" | "image/jpeg" | "image/webp" | "image/gif";
@@ -83,10 +83,36 @@ export interface FileReferencesMessage {
   items: FileReferenceItem[];
   available?: boolean;
 }
+
+export type SlashMenuSource = "command" | "skill";
+export type SlashMenuBehavior = "execute" | "command-input" | "insert";
+
+export interface SlashMenuItem {
+  source: SlashMenuSource;
+  name: string;
+  description: string;
+  behavior: SlashMenuBehavior;
+  hint?: string;
+  acceptsImages?: boolean;
+}
+
+export interface SlashAvailability {
+  commands: boolean;
+  skills: boolean;
+}
+
+export interface SlashItemsMessage {
+  kind: "slashItems";
+  requestId: string;
+  items: SlashMenuItem[];
+  availability: SlashAvailability;
+}
+
 export type OutboundMessage =
   | HelloMessage | SessionMessage | ReadyMessage | SessionsMessage
   | CatalogMessage | PermissionsMessage | ContextMessage | HistoryMessage
-  | EventMessage | AskMessage | StatusMessage | FileReferencesMessage;
+  | EventMessage | AskMessage | StatusMessage | FileReferencesMessage
+  | SlashItemsMessage;
 
 export interface SubmitCommand {
   kind: "submit";
@@ -109,10 +135,19 @@ export interface ListFileReferencesCommand {
   query: string;
   requestId: string;
 }
+export interface ListSlashItemsCommand {
+  kind: "listSlashItems";
+  requestId: string;
+}
+export interface ExecuteSlashCommand {
+  kind: "executeSlashCommand";
+  line: string;
+  images?: EncodedImageAttachment[];
+}
 export type InboundMessage =
   | SubmitCommand | AnswerCommand | CancelCommand | ResumeCommand | ExitCommand
   | ListSessionsCommand | NewSessionCommand | SelectModelCommand | SelectPermissionCommand
-  | ListFileReferencesCommand;
+  | ListFileReferencesCommand | ListSlashItemsCommand | ExecuteSlashCommand;
 
 // ---- question/answer wire types (mirror dsh-user-questions types, dependency-free) ----
 export interface AskQuestionWire { id: string; question: string; detail?: string; header?: string; options?: { label: string; description?: string }[]; multiSelect?: boolean }
@@ -146,12 +181,48 @@ function isFileReferenceItem(v: unknown): v is FileReferenceItem {
   return typeof o.path === "string" && (o.kind === "file" || o.kind === "directory");
 }
 
+function isSlashMenuItem(v: unknown): v is SlashMenuItem {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  if (typeof o.name !== "string" || o.name.length === 0) return false;
+  if (typeof o.description !== "string") return false;
+  if (o.source === "skill") {
+    return o.behavior === "insert"
+      && o.hint === undefined
+      && o.acceptsImages === undefined;
+  }
+  if (o.source !== "command" || o.behavior === "insert") return false;
+  if (o.behavior === "command-input") {
+    return typeof o.hint === "string"
+      && o.hint.length > 0
+      && (o.acceptsImages === undefined || typeof o.acceptsImages === "boolean");
+  }
+  return o.behavior === "execute"
+    && o.hint === undefined
+    && o.acceptsImages === undefined;
+}
+
+function isSlashAvailability(v: unknown): v is SlashAvailability {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.commands === "boolean" && typeof o.skills === "boolean";
+}
+
 function validateInboundPayload(m: unknown, k: string): boolean {
   if (typeof m !== "object" || m === null) return false;
   const o = m as Record<string, unknown>;
   switch (k) {
     case "listFileReferences":
       return typeof o.query === "string" && typeof o.requestId === "string";
+    case "listSlashItems":
+      return typeof o.requestId === "string" && o.requestId.length > 0;
+    case "executeSlashCommand":
+      if (typeof o.line !== "string" || !o.line.trimStart().startsWith("/")) return false;
+      if (o.images !== undefined) {
+        if (!Array.isArray(o.images)) return false;
+        if (!o.images.every(isEncodedImageAttachment)) return false;
+      }
+      return true;
     case "submit":
       if (typeof o.text !== "string") return false;
       if (o.images !== undefined) {
@@ -174,6 +245,11 @@ function validateOutboundPayload(m: unknown, k: string): boolean {
       if (!o.items.every(isFileReferenceItem)) return false;
       if (o.available !== undefined && typeof o.available !== "boolean") return false;
       return true;
+    case "slashItems":
+      if (typeof o.requestId !== "string" || o.requestId.length === 0) return false;
+      if (!Array.isArray(o.items)) return false;
+      if (!o.items.every(isSlashMenuItem)) return false;
+      return isSlashAvailability(o.availability);
     default:
       return true;
   }
@@ -181,12 +257,12 @@ function validateOutboundPayload(m: unknown, k: string): boolean {
 
 const OUTBOUND_KINDS = [
   "hello", "session", "ready", "sessions", "catalog", "permissions",
-  "context", "history", "event", "ask", "status", "fileReferences",
+  "context", "history", "event", "ask", "status", "fileReferences", "slashItems",
 ] as const;
 const INBOUND_KINDS = [
   "submit", "answer", "cancel", "resume", "exit",
   "listSessions", "newSession", "selectModel", "selectPermission",
-  "listFileReferences",
+  "listFileReferences", "listSlashItems", "executeSlashCommand",
 ] as const;
 
 export function isOutboundMessage(m: unknown): m is OutboundMessage {

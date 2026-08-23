@@ -22,6 +22,8 @@ function hooks() {
       selectModel: vi.fn(),
       selectPermission: vi.fn(),
       listFileReferences: vi.fn(),
+      listSlashItems: vi.fn(),
+      executeSlashCommand: vi.fn(),
     },
     provider: {
       ask: vi.fn<(request: AskUserQuestionRequest) => Promise<AskUserQuestionAnswer>>(),
@@ -104,6 +106,34 @@ describe("dispatchCommand", () => {
     );
 
     expect(h.runner.listFileReferences).toHaveBeenCalledWith("src", "r1");
+  });
+
+  it("maps listSlashItems to the runner", () => {
+    const h = hooks();
+
+    dispatchCommand(
+      inertCtx,
+      { kind: "listSlashItems", requestId: "slash-1" },
+      h,
+    );
+
+    expect(h.runner.listSlashItems).toHaveBeenCalledWith("slash-1");
+  });
+
+  it("maps executeSlashCommand to the runner executor", () => {
+    const h = hooks();
+    const images = [{ mediaType: "image/png" as const, data: "AQ==" }];
+
+    dispatchCommand(
+      inertCtx,
+      { kind: "executeSlashCommand", line: "/goal ship", images },
+      h,
+    );
+
+    expect(h.runner.executeSlashCommand).toHaveBeenCalledWith(
+      "/goal ship",
+      images,
+    );
   });
 
   it("forwards optional submit picker fields", () => {

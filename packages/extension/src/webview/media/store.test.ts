@@ -4,13 +4,16 @@ import type {
   EventMessage,
   AskQuestionWire,
   OutboundMessage,
+  SlashMenuItem,
 } from "@dsh-vscode/contract";
 import {
   contextPercent,
   filterSessions,
   reduce,
   initialState,
+  serializeCommand,
   serializeDraft,
+  type UiMessage,
   type UiState,
 } from "./store.js";
 
@@ -74,6 +77,29 @@ const PNG: EncodedImageAttachment = {
   mediaType: "image/png",
   data: "AQ==",
   name: "shot.png",
+};
+
+const COMPACT: SlashMenuItem = {
+  source: "command",
+  name: "compact",
+  description: "Compact context",
+  behavior: "execute",
+};
+
+const GOAL: SlashMenuItem = {
+  source: "command",
+  name: "goal",
+  description: "Set the goal",
+  behavior: "command-input",
+  hint: "<objective>",
+  acceptsImages: true,
+};
+
+const BRAINSTORMING: SlashMenuItem = {
+  source: "skill",
+  name: "brainstorming",
+  description: "Design first",
+  behavior: "insert",
 };
 
 /** The picker only opens once the bridge is ready, so picker cases start here. */
@@ -191,6 +217,52 @@ describe("reduce", () => {
     expect(resumed.transcript).toEqual([
       { role: "user", text: "ask", streaming: false },
       { role: "assistant", text: "partial answer", streaming: false },
+    ]);
+  });
+
+  it("folds command/run once from authoritative name and args fields", () => {
+    const running = reduce(
+      reduce(initialState, textDelta("unfinished")),
+      eventMsg("command/run", {
+        commandId: "cmd-1",
+        name: "goal",
+        args: " write tests",
+        source: { kind: "user" },
+      }),
+    );
+    expect(running.transcript).toEqual([
+      { role: "assistant", text: "unfinished", streaming: false },
+      { role: "user", text: "/goal write tests", streaming: false },
+    ]);
+    const done = reduce(
+      running,
+      eventMsg("command/done", {
+        commandId: "cmd-1",
+        kind: "success",
+      }),
+    );
+    expect(done.transcript).toBe(running.transcript);
+    expect(done.status).toBe("idle");
+  });
+
+  it("folds command/run history and omits unrecorded command input", () => {
+    const resumed = reduce(initialState, {
+      kind: "history",
+      sessionId: "s1",
+      events: [
+        eventMsg("command/run", {
+          commandId: "cmd-1",
+          name: "compact",
+          source: { kind: "user" },
+        }).event,
+        eventMsg("command/done", {
+          commandId: "cmd-1",
+          kind: "success",
+        }).event,
+      ],
+    });
+    expect(resumed.transcript).toEqual([
+      { role: "user", text: "/compact", streaming: false },
     ]);
   });
 
@@ -401,6 +473,349 @@ describe("reduce", () => {
     });
   });
 
+  it("keeps attachment and slash picker actions isolated", () => {
+    const slash = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "/go",
+      token: { start: 0, end: 3, query: "go", position: "leading" },
+      requestId: "slash-1",
+    });
+    expect(reduce(slash, { kind: "pickerDismissed" })).toBe(slash);
+    expect(
+      reduce(slash, {
+        kind: "fileReferences",
+        requestId: "slash-1",
+        items: [{ path: "wrong", kind: "file" }],
+      }),
+    ).toBe(slash);
+
+    const attachment = reduce(readyState, {
+      kind: "pickerOpened",
+      text: "@src",
+      token: { start: 0, end: 4, query: "src", quoted: false },
+      requestId: "attachment-1",
+    });
+    expect(reduce(attachment, { kind: "slashPickerDismissed" })).toBe(attachment);
+    expect(
+      reduce(attachment, {
+        kind: "slashItemsReceived",
+        requestId: "attachment-1",
+        items: [COMPACT],
+        availability: { commands: true, skills: true },
+      }),
+    ).toBe(attachment);
+  });
+
+  it("opens a slash picker without a catalog", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "try /go",
+      token: { start: 4, end: 7, query: "go", position: "inline" },
+      requestId: "slash-1",
+    });
+    expect(opened.draft).toBe("try /go");
+    expect(opened.picker).toMatchObject({
+      kind: "slash",
+      requestId: "slash-1",
+      token: { start: 4, end: 7, query: "go", position: "inline" },
+      catalog: [],
+      groups: [],
+      highlightedKey: undefined,
+    });
+  });
+
+  it("accepts only the current slash catalog and highlights its first row", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "/",
+      token: { start: 0, end: 1, query: "", position: "leading" },
+      requestId: "slash-2",
+    });
+    const stale = reduce(opened, {
+      kind: "slashItemsReceived",
+      requestId: "slash-1",
+      items: [COMPACT],
+      availability: { commands: true, skills: true },
+    });
+    expect(stale).toBe(opened);
+
+    const accepted = reduce(opened, {
+      kind: "slashItemsReceived",
+      requestId: "slash-2",
+      items: [GOAL, BRAINSTORMING],
+      availability: { commands: true, skills: true },
+    });
+    expect(accepted.picker).toMatchObject({
+      kind: "slash",
+      requestId: "slash-2",
+      catalog: [GOAL, BRAINSTORMING],
+      groups: [
+        { source: "command", items: [GOAL] },
+        { source: "skill", items: [BRAINSTORMING] },
+      ],
+      highlightedKey: "command:goal",
+    });
+  });
+
+  it("filters slash query edits locally without changing the request id", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "/",
+      token: { start: 0, end: 1, query: "", position: "leading" },
+      requestId: "slash-1",
+    });
+    const loaded = reduce(opened, {
+      kind: "slashItemsReceived",
+      requestId: "slash-1",
+      items: [COMPACT, GOAL, BRAINSTORMING],
+      availability: { commands: true, skills: true },
+    });
+    const filtered = reduce(loaded, {
+      kind: "slashTokenChanged",
+      text: "/go",
+      token: { start: 0, end: 3, query: "go", position: "leading" },
+    });
+    expect(filtered.draft).toBe("/go");
+    expect(filtered.picker).toMatchObject({
+      kind: "slash",
+      requestId: "slash-1",
+      token: { start: 0, end: 3, query: "go", position: "leading" },
+      groups: [{ source: "command", items: [GOAL] }],
+      highlightedKey: "command:goal",
+    });
+  });
+
+  it("dismisses slash picker when the caret leaves its token", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "/go",
+      token: { start: 0, end: 3, query: "go", position: "leading" },
+      requestId: "slash-1",
+    });
+    const dismissed = reduce(opened, {
+      kind: "slashTokenChanged",
+      text: "/go later",
+      token: undefined,
+    });
+    expect(dismissed.draft).toBe("/go later");
+    expect(dismissed.picker).toBeUndefined();
+  });
+
+  it("moves slash highlight cyclically across grouped rows", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "/",
+      token: { start: 0, end: 1, query: "", position: "leading" },
+      requestId: "slash-1",
+    });
+    const loaded = reduce(opened, {
+      kind: "slashItemsReceived",
+      requestId: "slash-1",
+      items: [COMPACT, BRAINSTORMING],
+      availability: { commands: true, skills: true },
+    });
+    const down = reduce(loaded, { kind: "slashHighlightMoved", delta: 1 });
+    expect(down.picker).toMatchObject({ highlightedKey: "skill:brainstorming" });
+    const wrapped = reduce(down, { kind: "slashHighlightMoved", delta: 1 });
+    expect(wrapped.picker).toMatchObject({ highlightedKey: "command:compact" });
+    const up = reduce(wrapped, { kind: "slashHighlightMoved", delta: -1 });
+    expect(up.picker).toMatchObject({ highlightedKey: "skill:brainstorming" });
+  });
+
+  it("inserts a picked skill without claiming command execution", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "use /brain now",
+      token: { start: 4, end: 10, query: "brain", position: "inline" },
+      requestId: "slash-1",
+    });
+    const picked = reduce(opened, {
+      kind: "slashItemPicked",
+      item: BRAINSTORMING,
+    });
+    expect(picked.draft).toBe("use /brainstorming  now");
+    expect(picked.picker).toBeUndefined();
+    expect(picked.commandClaim).toBeUndefined();
+  });
+
+  it("retains a valid leading command claim after an inline skill pick", () => {
+    const claim = {
+      name: "goal",
+      token: "/goal ",
+      hint: "<objective>",
+      acceptsImages: true,
+    };
+    const opened = reduce(
+      {
+        ...readyState,
+        draft: "/goal args /brain",
+        commandClaim: claim,
+      },
+      {
+        kind: "slashPickerOpened",
+        text: "/goal args /brain",
+        token: { start: 11, end: 17, query: "brain", position: "inline" },
+        requestId: "slash-1",
+      },
+    );
+
+    const picked = reduce(opened, {
+      kind: "slashItemPicked",
+      item: BRAINSTORMING,
+    });
+
+    expect(picked.draft).toBe("/goal args /brainstorming ");
+    expect(picked.commandClaim).toEqual(claim);
+  });
+
+  it("inserts an input command and records an exact-prefix claim", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "/go",
+      token: { start: 0, end: 3, query: "go", position: "leading" },
+      requestId: "slash-1",
+    });
+    const picked = reduce(opened, { kind: "slashItemPicked", item: GOAL });
+    expect(picked.draft).toBe("/goal ");
+    expect(picked.commandClaim).toEqual({
+      name: "goal",
+      token: "/goal ",
+      hint: "<objective>",
+      acceptsImages: true,
+    });
+
+    expect(
+      reduce(picked, { kind: "draftChanged", text: "/goal write tests" })
+        .commandClaim,
+    ).toEqual(picked.commandClaim);
+    expect(
+      reduce(picked, { kind: "draftChanged", text: " /goal write tests" })
+        .commandClaim,
+    ).toBeUndefined();
+    expect(
+      reduce(picked, { kind: "draftChanged", text: "/go write tests" })
+        .commandClaim,
+    ).toBeUndefined();
+  });
+
+  it("does not claim an input command picked from an inline token", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "use /go",
+      token: { start: 4, end: 7, query: "go", position: "inline" },
+      requestId: "slash-1",
+    });
+    const picked = reduce(opened, { kind: "slashItemPicked", item: GOAL });
+    expect(picked.draft).toBe("use /goal ");
+    expect(picked.commandClaim).toBeUndefined();
+  });
+
+  it("consumes only a bare command token and leaves execution to App", () => {
+    const opened = reduce(readyState, {
+      kind: "slashPickerOpened",
+      text: "keep /compact this",
+      token: { start: 5, end: 13, query: "compact", position: "inline" },
+      requestId: "slash-1",
+    });
+    const picked = reduce(opened, {
+      kind: "slashItemPicked",
+      item: COMPACT,
+    });
+    expect(picked.draft).toBe("keep  this");
+    expect(picked.picker).toBeUndefined();
+    expect(picked.commandClaim).toBeUndefined();
+    expect(picked.submitPending).toBe(false);
+  });
+
+  it("surfaces a local command error without consuming its draft or chips", () => {
+    const claimed: UiState = {
+      ...readyState,
+      draft: "/review src",
+      chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
+      commandClaim: {
+        name: "review",
+        token: "/review ",
+        acceptsImages: false,
+      },
+    };
+
+    const rejected = reduce(claimed, {
+      kind: "localError",
+      detail: "/review does not accept images",
+    });
+
+    expect(rejected.draft).toBe(claimed.draft);
+    expect(rejected.chips).toBe(claimed.chips);
+    expect(rejected.commandClaim).toBe(claimed.commandClaim);
+    expect(rejected.error).toBe("/review does not accept images");
+    expect(rejected.status).toBe("error");
+  });
+
+  it("clears picker and claim on session lifecycle boundaries", () => {
+    const claimed: UiState = {
+      ...readyState,
+      sessionId: "old",
+      draft: "/goal work",
+      commandClaim: {
+        name: "goal",
+        token: "/goal ",
+        hint: "<objective>",
+        acceptsImages: true,
+      },
+    };
+    const withPicker = reduce(claimed, {
+      kind: "slashPickerOpened",
+      text: "/goal work /b",
+      token: { start: 11, end: 13, query: "b", position: "inline" },
+      requestId: "slash-1",
+    });
+    const session = reduce(withPicker, {
+      kind: "session",
+      sessionId: "new",
+      cwd: "/tmp",
+      createdAt: 1,
+    });
+    expect(session.picker).toBeUndefined();
+    expect(session.commandClaim).toBeUndefined();
+
+    const lifecycleMessages: UiMessage[] = [
+      { kind: "history", sessionId: "old", events: [] },
+      { kind: "hostDisconnected", detail: "gone" },
+      { kind: "newChatStarted" },
+    ];
+    for (const message of lifecycleMessages) {
+      const next = reduce(withPicker, message);
+      expect(next.picker).toBeUndefined();
+      expect(next.commandClaim).toBeUndefined();
+    }
+  });
+
+  it("clears picker and claim when the current session is announced again", () => {
+    const claimed: UiState = {
+      ...readyState,
+      sessionId: "same",
+      commandClaim: {
+        name: "goal",
+        token: "/goal ",
+        acceptsImages: false,
+      },
+    };
+    const withPicker = reduce(claimed, {
+      kind: "slashPickerOpened",
+      text: "/goal work /b",
+      token: { start: 11, end: 13, query: "b", position: "inline" },
+      requestId: "slash-1",
+    });
+    const announced = reduce(withPicker, {
+      kind: "session",
+      sessionId: "same",
+      cwd: "/tmp",
+      createdAt: 1,
+    });
+    expect(announced.picker).toBeUndefined();
+    expect(announced.commandClaim).toBeUndefined();
+  });
+
   it("marks the current picker search unavailable", () => {
     const opened = reduce(readyState, {
       kind: "pickerOpened",
@@ -414,8 +829,12 @@ describe("reduce", () => {
       items: [],
       available: false,
     });
-    expect(unavailable.picker?.unavailable).toBe(true);
-    expect(unavailable.picker?.items).toEqual([]);
+    expect(unavailable.picker?.kind).toBe("attachment");
+    if (unavailable.picker?.kind !== "attachment") {
+      throw new Error("expected attachment picker");
+    }
+    expect(unavailable.picker.unavailable).toBe(true);
+    expect(unavailable.picker.items).toEqual([]);
   });
 
   it("replaces only the tracked token when the picker query changes", () => {
@@ -696,6 +1115,262 @@ describe("reduce", () => {
     expect(accepted.draft).toBe("");
   });
 
+  it("retains later draft and chip edits when the accepted command starts", () => {
+    const commandDraft: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "/goal write tests",
+      chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
+      commandClaim: {
+        name: "goal",
+        token: "/goal ",
+        acceptsImages: true,
+      },
+    };
+    const pending = reduce(commandDraft, {
+      kind: "commandSubmitStarted",
+      line: "/goal write tests",
+    });
+    const edited = reduce(
+      reduce(pending, {
+        kind: "draftChanged",
+        text: "/goal write different tests",
+      }),
+      {
+        kind: "imagesPicked",
+        images: [{ mediaType: "image/png", data: "Ag==", name: "later.png" }],
+      },
+    );
+    const accepted = reduce(
+      edited,
+      eventMsg("command/run", {
+        commandId: "cmd-1",
+        name: "goal",
+        args: " write tests",
+        source: { kind: "user" },
+      }),
+    );
+    expect(accepted.draft).toBe("/goal write different tests");
+    expect(accepted.chips.map((chip) => chip.label)).toEqual([
+      "shot.png",
+      "later.png",
+    ]);
+    expect(accepted.submitPending).toBe(false);
+    expect(
+      (accepted as UiState & { pendingCommandSubmission?: unknown })
+        .pendingCommandSubmission,
+    ).toBeUndefined();
+  });
+
+  it("retains accepted command identity through an unrelated command/run", () => {
+    const commandDraft: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "/goal write tests",
+      chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
+    };
+    const pending = reduce(commandDraft, {
+      kind: "commandSubmitStarted",
+      line: "/goal write tests",
+    });
+    const unrelated = reduce(
+      pending,
+      eventMsg("command/run", {
+        commandId: "cmd-2",
+        name: "compact",
+        source: { kind: "user" },
+      }),
+    );
+    expect(unrelated.draft).toBe("/goal write tests");
+    expect(unrelated.chips).toEqual(commandDraft.chips);
+    expect(unrelated.submitPending).toBe(true);
+    expect(
+      (unrelated as UiState & { pendingCommandSubmission?: unknown })
+        .pendingCommandSubmission,
+    ).toEqual(
+      (pending as UiState & { pendingCommandSubmission?: unknown })
+        .pendingCommandSubmission,
+    );
+  });
+
+  it("unlocks an args-redacted command/run by exact name and clears only an unchanged snapshot", () => {
+    const commandDraft: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "/feedback the menu is slow",
+      commandClaim: {
+        name: "feedback",
+        token: "/feedback ",
+        acceptsImages: false,
+      },
+    };
+    const pending = reduce(commandDraft, {
+      kind: "commandSubmitStarted",
+      line: "/feedback the menu is slow",
+    });
+    const accepted = reduce(
+      pending,
+      eventMsg("command/run", {
+        commandId: "cmd-feedback",
+        name: "feedback",
+        source: { kind: "user" },
+      }),
+    );
+    expect(accepted.transcript).toEqual([
+      { role: "user", text: "/feedback", streaming: false },
+    ]);
+    expect(accepted.draft).toBe("");
+    expect(accepted.chips).toEqual([]);
+    expect(accepted.submitPending).toBe(false);
+    expect(accepted.pendingCommandSubmission).toBeUndefined();
+    expect(accepted.commandClaim).toBeUndefined();
+
+    const edited = reduce(pending, {
+      kind: "draftChanged",
+      text: "/feedback later thought",
+    });
+    const retained = reduce(
+      edited,
+      eventMsg("command/run", {
+        commandId: "cmd-feedback",
+        name: "feedback",
+        source: { kind: "user" },
+      }),
+    );
+    expect(retained.draft).toBe("/feedback later thought");
+    expect(retained.submitPending).toBe(false);
+    expect(retained.pendingCommandSubmission).toBeUndefined();
+  });
+
+  it("backstop-settles a pending command on command/done without clearing the draft", () => {
+    const pending = reduce(
+      {
+        ...readyState,
+        sessionId: "s1",
+        draft: "/feedback the menu is slow",
+      },
+      {
+        kind: "commandSubmitStarted",
+        line: "/feedback the menu is slow",
+      },
+    );
+    const done = reduce(
+      pending,
+      eventMsg("command/done", {
+        commandId: "cmd-feedback",
+        kind: "success",
+      }),
+    );
+    expect(done.submitPending).toBe(false);
+    expect(done.pendingCommandSubmission).toBeUndefined();
+    expect(done.draft).toBe("/feedback the menu is slow");
+    expect(done.status).toBe("idle");
+  });
+
+  it("settles pending command idle or error without unlocking ordinary prompt submits", () => {
+    const commandPending = reduce(
+      {
+        ...readyState,
+        sessionId: "s1",
+        draft: "/feedback the menu is slow",
+      },
+      {
+        kind: "commandSubmitStarted",
+        line: "/feedback the menu is slow",
+      },
+    );
+    const cancelled = reduce(commandPending, statusMsg("idle"));
+    expect(cancelled.submitPending).toBe(false);
+    expect(cancelled.pendingCommandSubmission).toBeUndefined();
+    expect(cancelled.draft).toBe("/feedback the menu is slow");
+    expect(cancelled.status).toBe("idle");
+
+    const failed = reduce(
+      commandPending,
+      statusMsg("error", "handler exploded"),
+    );
+    expect(failed.submitPending).toBe(false);
+    expect(failed.pendingCommandSubmission).toBeUndefined();
+    expect(failed.draft).toBe("/feedback the menu is slow");
+    expect(failed.error).toBe("handler exploded");
+    expect(failed.status).toBe("error");
+
+    const promptPending = reduce(
+      { ...readyState, sessionId: "s1", draft: "hello" },
+      { kind: "submitStarted" },
+    );
+    expect(reduce(promptPending, statusMsg("idle")).submitPending).toBe(true);
+    expect(
+      reduce(promptPending, statusMsg("error", "unknown model")).submitPending,
+    ).toBe(true);
+  });
+
+  it("clears an unchanged accepted command on its matching command/run", () => {
+    const commandDraft: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "/goal write tests",
+      chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
+    };
+    const pending = reduce(commandDraft, {
+      kind: "commandSubmitStarted",
+      line: "/goal write tests",
+    });
+    const accepted = reduce(
+      pending,
+      eventMsg("command/run", {
+        commandId: "cmd-1",
+        name: "goal",
+        args: " write tests",
+        source: { kind: "user" },
+      }),
+    );
+    expect(accepted.draft).toBe("");
+    expect(accepted.chips).toEqual([]);
+    expect(accepted.submitPending).toBe(false);
+    expect(
+      (accepted as UiState & { pendingCommandSubmission?: unknown })
+        .pendingCommandSubmission,
+    ).toBeUndefined();
+  });
+
+  it("clears accepted command identity on rejection and session replacement", () => {
+    const commandDraft: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "/goal write tests",
+    };
+    const start = (): UiState =>
+      reduce(commandDraft, {
+        kind: "commandSubmitStarted",
+        line: "/goal write tests",
+      });
+
+    const rejected = reduce(start(), {
+      kind: "status",
+      state: "error",
+      code: "command-rejected",
+      detail: "unknown command",
+    });
+    expect(rejected.submitPending).toBe(false);
+    expect(
+      (rejected as UiState & { pendingCommandSubmission?: unknown })
+        .pendingCommandSubmission,
+    ).toBeUndefined();
+
+    const replaced = reduce(start(), {
+      kind: "session",
+      sessionId: "s2",
+      cwd: "/tmp",
+      createdAt: 1,
+    });
+    expect(replaced.submitPending).toBe(false);
+    expect(
+      (replaced as UiState & { pendingCommandSubmission?: unknown })
+        .pendingCommandSubmission,
+    ).toBeUndefined();
+  });
+
   it("unlocks a pending submit when the retained child disconnects", () => {
     const pending = reduce(
       { ...readyState, sessionId: "s1", draft: "look" },
@@ -811,6 +1486,7 @@ describe("composer helpers", () => {
           },
         ],
         picker: {
+          kind: "attachment",
           requestId: "r1",
           query: "src/my f",
           quoted: true,
@@ -829,6 +1505,7 @@ describe("composer helpers", () => {
         draft: "@",
         chips: [],
         picker: {
+          kind: "attachment",
           requestId: "r1",
           query: "",
           quoted: false,
@@ -845,6 +1522,7 @@ describe("composer helpers", () => {
         draft: "review @",
         chips: [{ id: "c1", kind: "image", image: PNG, label: "shot.png" }],
         picker: {
+          kind: "attachment",
           requestId: "r1",
           query: "",
           quoted: false,
@@ -855,5 +1533,71 @@ describe("composer helpers", () => {
         },
       }),
     ).toEqual({ text: "review", images: [PNG] });
+  });
+
+  it("serializes a valid command claim with normal mentions and encoded images", () => {
+    expect(
+      serializeCommand({
+        draft: "/goal write tests",
+        commandClaim: {
+          name: "goal",
+          token: "/goal ",
+          hint: "<objective>",
+          acceptsImages: true,
+        },
+        chips: [
+          {
+            id: "c1",
+            kind: "folder",
+            path: "src/lib",
+            mention: "@src/lib/",
+            label: "lib",
+          },
+          { id: "c2", kind: "image", image: PNG, label: "shot.png" },
+          {
+            id: "c3",
+            kind: "file",
+            path: "src/a.ts",
+            mention: "@src/a.ts",
+            label: "a.ts",
+          },
+        ],
+      }),
+    ).toEqual({
+      line: "/goal write tests @src/lib/ @src/a.ts",
+      images: [PNG],
+    });
+  });
+
+  it("rejects absent or invalid command claims during serialization", () => {
+    expect(
+      serializeCommand({
+        draft: "/goal write tests",
+        commandClaim: undefined,
+        chips: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      serializeCommand({
+        draft: " /goal write tests",
+        commandClaim: {
+          name: "goal",
+          token: "/goal ",
+          acceptsImages: false,
+        },
+        chips: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      serializeCommand({
+        draft: "/goalkeeper",
+        commandClaim: {
+          name: "goal",
+          token: "/goal ",
+          acceptsImages: false,
+        },
+        chips: [],
+      }),
+    ).toBeUndefined();
   });
 });

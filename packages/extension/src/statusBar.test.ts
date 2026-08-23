@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { nextStatus } from "./statusBar.js";
+import { nextStatus, protocolMismatchStatus } from "./statusBar.js";
 import type { OutboundMessage } from "@dsh-vscode/contract";
 
 function status(state: "idle" | "thinking" | "awaiting-approval" | "error", detail?: string): OutboundMessage {
@@ -21,6 +21,25 @@ describe("statusBar.nextStatus", () => {
   });
   it("turn/end -> idle", () => {
     expect(nextStatus("thinking", event("turn/end"))).toEqual({ state: "idle", text: "Idle" });
+  });
+  it("command/run -> thinking", () => {
+    expect(nextStatus("idle", event("command/run"))).toEqual({
+      state: "thinking",
+      text: "Thinking…",
+    });
+  });
+  it("command/done -> idle", () => {
+    expect(nextStatus("thinking", event("command/done"))).toEqual({
+      state: "idle",
+      text: "Idle",
+    });
+  });
+  it("surfaces a protocol mismatch as a visible error status", () => {
+    expect(protocolMismatchStatus(3, 4)).toEqual({
+      kind: "status",
+      state: "error",
+      detail: "protocol version mismatch: bridge=3 extension=4",
+    });
   });
   it("status mirrors state and uses detail", () => {
     expect(nextStatus("idle", status("error", "boom"))).toEqual({ state: "error", text: "boom" });

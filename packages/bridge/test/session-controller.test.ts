@@ -18,6 +18,9 @@ import {
   type ImageAttachmentRef,
   type SaveImageAttachment,
 } from "@deepseek-ai/dsh-attachment";
+import CommandRuntime, {
+  type CommandInvocation,
+} from "@deepseek-ai/dsh-commands";
 import type { LlmResolvedModelInfo } from "@deepseek-ai/dsh-llm";
 import {
   startMockLlmServer,
@@ -139,6 +142,34 @@ function deferredImageSave(): {
     started,
     release,
   };
+}
+
+async function installHoldingCommand(ctx: Context): Promise<{
+  started: Promise<void>;
+  signal: () => AbortSignal | undefined;
+}> {
+  await ctx.plugin(CommandRuntime);
+  const commands = ctx.get("commands");
+  if (commands === undefined) throw new Error("commands were not mounted");
+  let activeSignal: AbortSignal | undefined;
+  let markStarted: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  commands.register({
+    name: "hold",
+    description: "Wait until cancellation",
+    handler: ({ signal }) => {
+      activeSignal = signal;
+      markStarted();
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      });
+    },
+  });
+  return { started, signal: () => activeSignal };
 }
 
 describe("session controller", () => {
@@ -292,6 +323,310 @@ describe("session controller", () => {
       expect(list.available).toBe(false);
       expect(list.items).toHaveLength(1);
     }
+  });
+
+  it("executes a real slash command with DSH-owned lifecycle events", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await boot();
+    await ctx.plugin(CommandRuntime);
+    const commands = ctx.get("commands");
+    if (commands === undefined) throw new Error("commands were not mounted");
+    commands.register({
+      name: "compact",
+      description: "Compact context",
+      handler: () => ({ kind: "success" }),
+    });
+    const runner = await createRunner(ctx, capture(messages));
+    const session = ctx.get("agents")?.roots()[0]?.session;
+    if (session === undefined) throw new Error("live session was not mounted");
+
+    runner.executeSlashCommand("/compact");
+
+    await waitFor(() =>
+      messages.some(
+        (message) => message.kind === "status" && message.state === "idle",
+      ),
+    );
+    const eventTypes = session.events.map((event) => event.type);
+    expect(eventTypes).toContain("command/run");
+    expect(eventTypes).toContain("command/done");
+    expect(eventTypes.indexOf("command/run")).toBeLessThan(
+      eventTypes.indexOf("command/done"),
+    );
+    expect(eventTypes).not.toContain("user/message");
+  });
+
+  it("reports a real command handler failure without command-rejected", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await boot();
+    await ctx.plugin(CommandRuntime);
+    const commands = ctx.get("commands");
+    if (commands === undefined) throw new Error("commands were not mounted");
+    commands.register({
+      name: "fail",
+      description: "Fail after dispatch",
+      handler: () => {
+        throw new Error("command handler failed");
+      },
+    });
+    const runner = await createRunner(ctx, capture(messages));
+
+    runner.executeSlashCommand("/fail");
+
+    await waitFor(() =>
+      messages.some(
+        (message) =>
+          message.kind === "status" &&
+          message.state === "error" &&
+          message.detail === "command handler failed",
+      ),
+    );
+    const status = messages.find(
+      (message) =>
+        message.kind === "status" &&
+        message.state === "error" &&
+        message.detail === "command handler failed",
+    );
+    expect(status?.kind === "status" ? status.code : "missing").toBeUndefined();
+    const eventTypes = messages
+      .filter((message) => message.kind === "event")
+      .map((message) => message.event.type);
+    expect(eventTypes).toEqual(
+      expect.arrayContaining(["command/run", "command/done"]),
+    );
+  });
+
+  it("delivers admitted command images through DSH's handler envelope", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await imageBoot(async () => [IMAGE_REF]);
+    await ctx.plugin(CommandRuntime);
+    const commands = ctx.get("commands");
+    if (commands === undefined) throw new Error("commands were not mounted");
+    let invocation: CommandInvocation | undefined;
+    commands.register({
+      name: "goal",
+      description: "Set the goal",
+      input: { hint: "<objective>", images: true },
+      handler: (received) => {
+        invocation = received;
+        return { kind: "success" };
+      },
+    });
+    const runner = await createRunner(ctx, capture(messages));
+
+    runner.executeSlashCommand("/goal inspect", [
+      { mediaType: "image/png", data: "AQ==", name: "a.png" },
+    ]);
+
+    await waitFor(() => invocation !== undefined);
+    expect(invocation?.rawInput).toBe(" inspect");
+    expect(invocation?.attachments).toEqual([
+      { type: "image", attachment: IMAGE_REF },
+    ]);
+  });
+
+  it("new session aborts an active slash command without stale rejection", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await boot();
+    const holding = await installHoldingCommand(ctx);
+    const runner = await createRunner(ctx, capture(messages));
+
+    runner.executeSlashCommand("/hold");
+    await holding.started;
+    runner.newSession();
+
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 2,
+    );
+    expect(holding.signal()?.aborted).toBe(true);
+    expect(
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "command-rejected",
+      ),
+    ).toBe(false);
+  });
+
+  it("cancel emits idle only after DSH logs command completion", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await boot();
+    const holding = await installHoldingCommand(ctx);
+    const runner = await createRunner(ctx, capture(messages));
+
+    runner.executeSlashCommand("/hold");
+    await holding.started;
+    runner.cancel();
+
+    expect(holding.signal()?.aborted).toBe(true);
+    await waitFor(() =>
+      messages.some(
+        (message) => message.kind === "status" && message.state === "idle",
+      ),
+    );
+    const doneIndex = messages.findIndex(
+      (message) =>
+        message.kind === "event" && message.event.type === "command/done",
+    );
+    const idleIndex = messages.findIndex(
+      (message) => message.kind === "status" && message.state === "idle",
+    );
+    expect(doneIndex).toBeGreaterThanOrEqual(0);
+    expect(idleIndex).toBeGreaterThan(doneIndex);
+    expect(
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "command-rejected",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks outgoing command execution as soon as replacement is requested", async () => {
+    const messages: OutboundMessage[] = [];
+    const deferred = deferredImageSave();
+    const ctx = await imageBoot(deferred.saveImages);
+    const holding = await installHoldingCommand(ctx);
+    const commands = ctx.get("commands");
+    if (commands === undefined) throw new Error("commands were not mounted");
+    let quickRan = false;
+    commands.register({
+      name: "quick",
+      description: "Record execution",
+      handler: () => {
+        quickRan = true;
+        return { kind: "success" };
+      },
+    });
+    const runner = await createRunner(ctx, capture(messages));
+
+    runner.submit("block replacement", {
+      images: [{ mediaType: "image/png", data: "AQ==" }],
+    });
+    await deferred.started;
+    runner.executeSlashCommand("/hold");
+    await holding.started;
+    runner.newSession();
+    await waitFor(() =>
+      messages.some(
+        (message) =>
+          message.kind === "event" && message.event.type === "command/done",
+      ),
+    );
+
+    runner.executeSlashCommand("/quick");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(quickRan).toBe(false);
+    expect(
+      messages.some(
+        (message) =>
+          message.kind === "status" && message.code === "command-rejected",
+      ),
+    ).toBe(false);
+    deferred.release();
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 2,
+    );
+  });
+
+  it("resume aborts an active slash command before replacement", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await boot();
+    const holding = await installHoldingCommand(ctx);
+    const runner = await createRunner(ctx, capture(messages));
+    const first = messages.find((message) => message.kind === "ready");
+    if (first?.kind !== "ready") throw new Error("runner did not become ready");
+    runner.newSession();
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 2,
+    );
+
+    runner.executeSlashCommand("/hold");
+    await holding.started;
+    runner.resume(first.sessionId);
+
+    expect(holding.signal()?.aborted).toBe(true);
+  });
+
+  it("resumes the requested old session after a queued new session", async () => {
+    const messages: OutboundMessage[] = [];
+    const runner = await createRunner(await boot(), capture(messages));
+    const first = messages.find((message) => message.kind === "ready");
+    if (first?.kind !== "ready") throw new Error("runner did not become ready");
+    runner.submit("persist queued resume target");
+    await waitFor(() =>
+      messages.some(
+        (message) => message.kind === "status" && message.state === "idle",
+      ),
+    );
+
+    runner.newSession();
+    runner.resume(first.sessionId);
+
+    await waitFor(
+      () => messages.filter((message) => message.kind === "ready").length === 3,
+    );
+    const readyIds = messages
+      .filter((message) => message.kind === "ready")
+      .map((message) => message.sessionId);
+    expect(readyIds.at(-1)).toBe(first.sessionId);
+    expect(readyIds.at(-2)).not.toBe(first.sessionId);
+  });
+
+  it("restores command execution when cross-session resume fails", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await boot();
+    await ctx.plugin(CommandRuntime);
+    const commands = ctx.get("commands");
+    if (commands === undefined) throw new Error("commands were not mounted");
+    let ran = false;
+    commands.register({
+      name: "quick",
+      description: "Record execution",
+      handler: () => {
+        ran = true;
+        return { kind: "success" };
+      },
+    });
+    const runner = await createRunner(ctx, capture(messages));
+
+    runner.resume("missing-id");
+    await waitFor(() =>
+      messages.some(
+        (message) => message.kind === "status" && message.state === "error",
+      ),
+    );
+    runner.executeSlashCommand("/quick");
+
+    await waitFor(() => ran);
+    expect(ran).toBe(true);
+  });
+
+  it("disconnect aborts an active slash command", async () => {
+    const disconnectListeners: Array<() => void> = [];
+    const ctx = await boot();
+    const holding = await installHoldingCommand(ctx);
+    const runner = await createRunner(
+      ctx,
+      capture([], disconnectListeners),
+    );
+
+    runner.executeSlashCommand("/hold");
+    await holding.started;
+    for (const disconnect of disconnectListeners) disconnect();
+
+    expect(holding.signal()?.aborted).toBe(true);
+  });
+
+  it("context disposal aborts an active slash command", async () => {
+    const ctx = await boot();
+    const holding = await installHoldingCommand(ctx);
+    const runner = await createRunner(ctx, capture([]));
+
+    runner.executeSlashCommand("/hold");
+    await holding.started;
+    await ctx.fiber.dispose();
+
+    expect(holding.signal()?.aborted).toBe(true);
   });
 
   it("creates a different session and emits its empty history", async () => {

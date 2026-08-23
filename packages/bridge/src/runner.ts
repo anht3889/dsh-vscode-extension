@@ -31,6 +31,8 @@ import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
 import { createFileReferenceSearch } from "./file-references.js";
 import { admitImages } from "./image-admission.js";
+import { createSlashCatalog } from "./slash-catalog.js";
+import { createSlashCommandExecutor } from "./slash-command.js";
 
 const PRESET_LABELS: Record<string, string> = {
   "read-only": "Read Only",
@@ -411,6 +413,11 @@ export interface SessionController {
   selectModel(provider: string, model: string): void;
   selectPermission(preset: string): void;
   listFileReferences(query: string, requestId: string): void;
+  listSlashItems(requestId: string): void;
+  executeSlashCommand(
+    line: string,
+    images?: readonly EncodedImageAttachment[],
+  ): void;
 }
 
 /**
@@ -496,8 +503,57 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     () => live.handle.agent,
     (message) => io.send(message),
   );
+  const createLiveSlashCatalog = () =>
+    createSlashCatalog(
+      ctx,
+      () => live.handle.agent,
+      (message) => io.send(message),
+    );
+  const createLiveSlashCommandExecutor = () =>
+    createSlashCommandExecutor(
+      ctx,
+      () => live.handle.agent,
+      (message) => io.send(message),
+    );
+  let slashCatalog = createLiveSlashCatalog();
+  let slashCommandExecutor = createLiveSlashCommandExecutor();
+  // Restore-gate only. Execute uses the current executor object; this flag
+  // is false after retire so one matching restore can recreate it.
+  let slashCommandExecutorRestored = true;
+  let slashCommandGeneration = 0;
+  let slashCommandLifecycleDisposed = false;
+  const retireSlashCommandExecutor = (): number => {
+    slashCommandExecutor.dispose();
+    slashCommandExecutorRestored = false;
+    slashCommandGeneration += 1;
+    return slashCommandGeneration;
+  };
+  const restoreSlashCommandExecutor = (generation: number): void => {
+    if (
+      slashCommandLifecycleDisposed ||
+      slashCommandExecutorRestored ||
+      slashCommandGeneration !== generation
+    ) {
+      return;
+    }
+    slashCommandExecutor = createLiveSlashCommandExecutor();
+    slashCommandExecutorRestored = true;
+  };
+  const disposeSlashCommandLifecycle = (): void => {
+    slashCommandLifecycleDisposed = true;
+    slashCommandGeneration += 1;
+    slashCommandExecutorRestored = false;
+    slashCommandExecutor.dispose();
+  };
   io.onDisconnect(fileReferenceSearch.dispose);
+  io.onDisconnect(() => slashCatalog.dispose());
+  io.onDisconnect(disposeSlashCommandLifecycle);
   io.onDisconnect(abortActiveAdmission);
+  ctx.effect(() => () => {
+    slashCatalog.dispose();
+    disposeSlashCommandLifecycle();
+    abortActiveAdmission();
+  });
 
   const emitLiveSession = async (
     current: LiveSession,
@@ -540,18 +596,27 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const replaceLive = async (
     create: (selectionRef: LiveSelectionRef) => Promise<AgentHandle>,
+    slashGeneration: number,
   ): Promise<void> => {
     abortActiveAdmission();
     fileReferenceSearch.dispose();
+    slashCatalog.dispose();
     const previous = live;
     const nextSelectionRef: LiveSelectionRef = {
       current: { ...previous.selectionRef.current },
       assembled: undefined,
     };
-    const next: LiveSession = {
-      handle: await create(nextSelectionRef),
-      selectionRef: nextSelectionRef,
-    };
+    let next: LiveSession;
+    try {
+      next = {
+        handle: await create(nextSelectionRef),
+        selectionRef: nextSelectionRef,
+      };
+    } catch (error) {
+      slashCatalog = createLiveSlashCatalog();
+      restoreSlashCommandExecutor(slashGeneration);
+      throw error;
+    }
     try {
       previous.handle.agent.cancel({ kind: "user" });
       await previous.handle.agent.whenIdle();
@@ -559,17 +624,23 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     } catch (error) {
       await sessions.flush(next.handle.agent.session);
       await next.handle.dispose();
+      slashCatalog = createLiveSlashCatalog();
+      restoreSlashCommandExecutor(slashGeneration);
       throw error;
     }
     try {
       await previous.handle.dispose();
     } catch (error) {
       live = next;
+      slashCatalog = createLiveSlashCatalog();
+      restoreSlashCommandExecutor(slashGeneration);
       await next.handle.agent.whenIdle();
       await emitLiveSession(next, true);
       throw error;
     }
     live = next;
+    slashCatalog = createLiveSlashCatalog();
+    restoreSlashCommandExecutor(slashGeneration);
     await next.handle.agent.whenIdle();
     await emitLiveSession(next, true);
   };
@@ -732,6 +803,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const cancel = (): void => {
     abortActiveAdmission();
+    slashCommandExecutor.cancel();
     live.handle.agent.cancel({ kind: "user" });
   };
 
@@ -844,6 +916,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   const newSession = (): void => {
     abortActiveAdmission();
+    const slashGeneration = retireSlashCommandExecutor();
     queue(async () => {
       await replaceLive(async (selectionRef) => {
         const handle = await agents.create({
@@ -866,47 +939,61 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
           permissionPresets.set(handle.agent.session, "workspace-write");
         }
         return handle;
-      });
+      }, slashGeneration);
     });
   };
 
   const resume = (sessionId: string): void => {
+    let slashGeneration: number | undefined;
     if (sessionId !== live.handle.agent.session.id) {
       abortActiveAdmission();
+      slashGeneration = retireSlashCommandExecutor();
     }
     queue(async () => {
-      if (sessionId === live.handle.agent.session.id) {
-        await emitLiveSession(live, true);
-        return;
+      try {
+        if (sessionId === live.handle.agent.session.id) {
+          await emitLiveSession(live, true);
+          return;
+        }
+        if (slashGeneration === undefined) {
+          abortActiveAdmission();
+          slashGeneration = retireSlashCommandExecutor();
+        }
+        const persistence = getSessionPersistence(ctx);
+        if (persistence === undefined) {
+          throw new Error(`cannot resume ${sessionId} (durable history unavailable)`);
+        }
+        const inspection = await persistence.inspect(SessionId(sessionId));
+        if (
+          inspection.meta.cwd !== undefined &&
+          inspection.meta.cwd !== process.cwd()
+        ) {
+          io.send({
+            kind: "status",
+            state: "error",
+            detail: `cannot resume ${sessionId} (cwd mismatch)`,
+          });
+          return;
+        }
+        await replaceLive(
+          (selectionRef) =>
+            agents.resume({
+              resumeSessionId: SessionId(sessionId),
+              agentOptions: {
+                provider: selectionRef.current.provider,
+                model: selectionRef.current.model,
+              },
+              setup: (agentCtx) => {
+                installModelSelection(agentCtx, selectionRef);
+              },
+            }),
+          slashGeneration,
+        );
+      } finally {
+        if (slashGeneration !== undefined) {
+          restoreSlashCommandExecutor(slashGeneration);
+        }
       }
-      const persistence = getSessionPersistence(ctx);
-      if (persistence === undefined) {
-        throw new Error(`cannot resume ${sessionId} (durable history unavailable)`);
-      }
-      const inspection = await persistence.inspect(SessionId(sessionId));
-      if (
-        inspection.meta.cwd !== undefined &&
-        inspection.meta.cwd !== process.cwd()
-      ) {
-        io.send({
-          kind: "status",
-          state: "error",
-          detail: `cannot resume ${sessionId} (cwd mismatch)`,
-        });
-        return;
-      }
-      await replaceLive((selectionRef) =>
-        agents.resume({
-          resumeSessionId: SessionId(sessionId),
-          agentOptions: {
-            provider: selectionRef.current.provider,
-            model: selectionRef.current.model,
-          },
-          setup: (agentCtx) => {
-            installModelSelection(agentCtx, selectionRef);
-          },
-        }),
-      );
     });
   };
 
@@ -947,6 +1034,9 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     selectModel,
     selectPermission,
     listFileReferences: fileReferenceSearch.list,
+    listSlashItems: (requestId) => slashCatalog.list(requestId),
+    executeSlashCommand: (line, images) =>
+      slashCommandExecutor.execute(line, images),
   };
 }
 

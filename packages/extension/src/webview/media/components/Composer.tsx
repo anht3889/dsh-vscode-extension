@@ -1,18 +1,22 @@
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import type {
   CatalogPayload,
   ContextPayload,
   FileReferenceItem,
   PermissionsPayload,
+  SlashMenuItem,
 } from "@dsh-vscode/contract";
 import {
   contextPercent,
   serializeDraft,
+  slashItemKey,
+  type CommandClaim,
   type DraftChip,
   type PickerState,
 } from "../store.js";
 import { AttachmentPicker } from "./AttachmentPicker.js";
 import { ChipRail } from "./ChipRail.js";
+import { SlashPicker, slashItemId } from "./SlashPicker.js";
 
 interface ComposerProps {
   ready: boolean;
@@ -23,11 +27,15 @@ interface ComposerProps {
   draft: string;
   chips: DraftChip[];
   picker: PickerState | undefined;
+  commandClaim: CommandClaim | undefined;
   submitPending: boolean;
   onDraftChange(text: string, selectionStart: number): void;
+  onCaretChange(text: string, selectionStart: number): void;
   onOpenPicker(selectionStart: number): void;
   onPickerQuery(query: string): void;
   onPickReference(item: FileReferenceItem): void;
+  onMoveSlashHighlight(delta: -1 | 1): void;
+  onPickSlashItem(item: SlashMenuItem): number | undefined;
   onDismissPicker(): void;
   onRemoveChip(id: string): void;
   onAttachImage(): void;
@@ -68,11 +76,15 @@ export function Composer({
   draft,
   chips,
   picker,
+  commandClaim,
   submitPending,
   onDraftChange,
+  onCaretChange,
   onOpenPicker,
   onPickerQuery,
   onPickReference,
+  onMoveSlashHighlight,
+  onPickSlashItem,
   onDismissPicker,
   onRemoveChip,
   onAttachImage,
@@ -83,6 +95,7 @@ export function Composer({
   onSelectPermission,
   onRequestFullAccess,
 }: ComposerProps): JSX.Element {
+  const composerRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // A textarea the user has never interacted with reports selectionStart 0, so
   // reading it would insert `@` in front of an existing draft. Track the caret
@@ -93,6 +106,37 @@ export function Composer({
     !ready ||
     submitPending ||
     (payload.text === "" && payload.images === undefined);
+  const slashPicker = picker?.kind === "slash" ? picker : undefined;
+  const highlightedSlashItem = slashPicker?.groups
+    .flatMap((group) => group.items)
+    .find((item) => slashItemKey(item) === slashPicker.highlightedKey);
+
+  useEffect(() => {
+    if (slashPicker === undefined) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      if (
+        event.target instanceof Node &&
+        composerRef.current?.contains(event.target) === false
+      ) {
+        onDismissPicker();
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [onDismissPicker, slashPicker]);
+
+  const pickSlashItem = useCallback(
+    (item: SlashMenuItem): void => {
+      const caret = onPickSlashItem(item);
+      if (caret === undefined) return;
+      queueMicrotask(() => {
+        caretRef.current = caret;
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(caret, caret);
+      });
+    },
+    [onPickSlashItem],
+  );
 
   const send = useCallback((): void => {
     if (status === "thinking" || sendDisabled) return;
@@ -101,12 +145,38 @@ export function Composer({
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+      if (e.nativeEvent.isComposing) return;
+      if (e.key === "Enter" && e.shiftKey) return;
+      if (slashPicker !== undefined) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          onMoveSlashHighlight(e.key === "ArrowDown" ? 1 : -1);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onDismissPicker();
+          return;
+        }
+        if (e.key === "Enter" && highlightedSlashItem !== undefined) {
+          e.preventDefault();
+          pickSlashItem(highlightedSlashItem);
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         send();
       }
     },
-    [send],
+    [
+      highlightedSlashItem,
+      onDismissPicker,
+      onMoveSlashHighlight,
+      pickSlashItem,
+      send,
+      slashPicker,
+    ],
   );
 
   const selectPermission = useCallback(
@@ -127,8 +197,8 @@ export function Composer({
       : `${models.current.provider}${MODEL_SEPARATOR}${models.current.model}`;
 
   return (
-    <footer className="dsh-composer">
-      {picker !== undefined ? (
+    <footer ref={composerRef} className="dsh-composer">
+      {picker?.kind === "attachment" ? (
         <AttachmentPicker
           query={picker.query}
           items={picker.items}
@@ -140,6 +210,9 @@ export function Composer({
           autoFocus={focusPickerSearch}
         />
       ) : null}
+      {slashPicker !== undefined ? (
+        <SlashPicker picker={slashPicker} onPick={pickSlashItem} />
+      ) : null}
       {chips.length > 0 ? (
         <ChipRail chips={chips} onRemove={onRemoveChip} />
       ) : null}
@@ -149,15 +222,34 @@ export function Composer({
         rows={3}
         value={draft}
         placeholder="Message DSH…"
+        role={slashPicker === undefined ? undefined : "combobox"}
+        aria-expanded={slashPicker === undefined ? undefined : true}
+        aria-controls={
+          slashPicker === undefined ? undefined : "dsh-slash-listbox"
+        }
+        aria-activedescendant={
+          highlightedSlashItem === undefined
+            ? undefined
+            : slashItemId(highlightedSlashItem)
+        }
+        aria-describedby={
+          commandClaim?.hint === undefined ? undefined : "dsh-command-claim-hint"
+        }
         onChange={(e) => {
           caretRef.current = e.target.selectionStart;
           onDraftChange(e.target.value, e.target.selectionStart);
         }}
         onSelect={(e) => {
           caretRef.current = e.currentTarget.selectionStart;
+          onCaretChange(e.currentTarget.value, e.currentTarget.selectionStart);
         }}
         onKeyDown={onKeyDown}
       />
+      {commandClaim?.hint === undefined ? null : (
+        <div className="dsh-command-claim-hint" id="dsh-command-claim-hint">
+          {commandClaim.hint}
+        </div>
+      )}
       <div className="dsh-composer-toolbar">
         <div className="dsh-composer-selectors">
           <select

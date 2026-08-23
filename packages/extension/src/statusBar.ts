@@ -14,16 +14,28 @@ export function nextStatus(prev: DshState, msg: OutboundMessage): StatusUi {
     case "ask":
       return { state: "awaiting-approval", text: "Awaiting approval" };
     case "event":
-      if (msg.event.type === "turn/start") {
+      if (msg.event.type === "turn/start" || msg.event.type === "command/run") {
         return { state: "thinking", text: "Thinking…" };
       }
-      if (msg.event.type === "turn/end") {
+      if (msg.event.type === "turn/end" || msg.event.type === "command/done") {
         return { state: "idle", text: "Idle" };
       }
       return { state: prev, text: descriptionFor(prev) };
     default:
       return { state: prev, text: descriptionFor(prev) };
   }
+}
+
+/** Visible status posted when the host refuses a mismatched hello handshake. */
+export function protocolMismatchStatus(
+  bridgeVersion: number,
+  extensionVersion: number,
+): { kind: "status"; state: "error"; detail: string } {
+  return {
+    kind: "status",
+    state: "error",
+    detail: `protocol version mismatch: bridge=${bridgeVersion} extension=${extensionVersion}`,
+  };
 }
 
 function descriptionFor(state: DshState): string {

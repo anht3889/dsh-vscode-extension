@@ -6,7 +6,7 @@ import { ProcessManager } from "../processManager.js";
 import type { ProtocolClient } from "../protocolClient.js";
 import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
-import { nextStatus, type DshState } from "../statusBar.js";
+import { nextStatus, protocolMismatchStatus, type DshState } from "../statusBar.js";
 import { encodeImageSelection } from "./attachments.js";
 import type { ImagesPickedMessage } from "./media/vscode.js";
 
@@ -236,9 +236,11 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     // Version handshake is host-only: check it, do not forward to the webview.
     if (m.kind === "hello") {
       if (m.version !== PROTOCOL_VERSION) {
-        console.warn(
-          `[dsh] protocol version mismatch: bridge=${m.version} extension=${PROTOCOL_VERSION}`,
-        );
+        const mismatch = protocolMismatchStatus(m.version, PROTOCOL_VERSION);
+        console.warn(`[dsh] ${mismatch.detail}`);
+        this.updateStatus(mismatch);
+        this.view?.webview.postMessage(mismatch);
+        return;
       }
       this.updateStatus(m);
       return;

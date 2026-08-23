@@ -29,6 +29,37 @@ Image chips depend on the selected model declaring image input and on DSH
 attachment limits. Full Access requires confirmation once per chat. Settings is
 reserved for a later release.
 
+## Slash menu
+
+Typing `/query` at the caret opens the session-scoped slash menu after the
+bridge is Ready. The slash must begin the draft or follow whitespace or
+punctuation. Slashes inside words (`a/b`), the second slash in `//`, URLs, and
+drive prefixes such as `C:/` do not trigger the menu. An active `@` file or
+folder reference takes priority. Input-taking commands appear only when the
+slash token begins the trimmed draft; bare commands and skills can also appear
+inline.
+
+Results are grouped as **Commands** then **Skills**. Commands use fuzzy matching
+with prefix-biased ranking; skills use prefix matching. Down and Up cycle the
+highlight, Enter picks it, Escape dismisses the menu without changing the
+draft, and Shift+Enter inserts a newline. Enter with no highlighted result keeps
+the composer's ordinary send behavior.
+
+Picking a bare command removes its active token and runs it immediately without
+sending any remaining draft text. Picking a command that accepts input replaces
+the token with `/name ` and runs the complete line when Send is used. Picking a
+skill inserts `/name ` as ordinary prompt text for normal submission. A leading
+slash token that was not selected as a known command is sent as an ordinary
+user message.
+
+Only input-taking commands explicitly marked as accepting images can run with
+image chips. A text-only command keeps its draft and chips and shows an error
+instead of running. If commands or skills cannot be listed, that source is
+marked unavailable while results from the other source remain usable; the menu
+closes when neither source has selectable results. Command invocations render
+as user slash rows in the transcript and remain visible after resuming the
+session.
+
 pnpm monorepo with three workspace packages:
 
 | Package | Role |
@@ -68,7 +99,7 @@ To run the extension in a VS Code Extension Development Host:
 
 ```bash
 pnpm -r build    # type-check + bundle (esbuild)
-pnpm -r test     # unit tests (vitest) — 28 tests across contract/bridge/extension
+pnpm -r test     # unit tests (vitest) across contract/bridge/extension
 ```
 
 ### End-to-end

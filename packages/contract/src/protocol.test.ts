@@ -30,9 +30,196 @@ describe("isInboundMessage", () => {
   });
 });
 
-describe("protocol v3", () => {
-  it("uses protocol v3", () => {
-    expect(PROTOCOL_VERSION).toBe(3);
+describe("protocol v4 slash messages", () => {
+  it("accepts listSlashItems and executeSlashCommand inbound messages", () => {
+    expect(isInboundMessage({ kind: "listSlashItems", requestId: "r1" })).toBe(true);
+    expect(isInboundMessage({
+      kind: "executeSlashCommand",
+      line: "/goal ship it",
+      images: [{ mediaType: "image/png", data: "AA==" }],
+    })).toBe(true);
+  });
+
+  it("accepts slashItems outbound messages", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [
+        {
+          source: "command",
+          name: "goal",
+          description: "Set the goal",
+          behavior: "command-input",
+          hint: "<objective>",
+          acceptsImages: false,
+        },
+        {
+          source: "skill",
+          name: "brainstorming",
+          description: "Design before implementation",
+          behavior: "insert",
+        },
+      ],
+      availability: { commands: true, skills: true },
+    })).toBe(true);
+  });
+
+  it("rejects empty request ids", () => {
+    expect(isInboundMessage({ kind: "listSlashItems", requestId: "" })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "",
+      items: [],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects non-slash execution lines", () => {
+    expect(isInboundMessage({ kind: "executeSlashCommand", line: "goal ship it" })).toBe(false);
+    expect(isInboundMessage({ kind: "executeSlashCommand", line: "  goal ship it" })).toBe(false);
+  });
+
+  it("rejects unknown source and behavior", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "unknown", name: "x", description: "d", behavior: "execute" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "x", description: "d", behavior: "unknown" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects empty names", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "", description: "d", behavior: "execute" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects skill behaviors other than insert", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "skill", name: "x", description: "d", behavior: "execute" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "skill", name: "x", description: "d", behavior: "command-input", hint: "h" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects command behavior insert", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "x", description: "d", behavior: "insert" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects missing command-input hint", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "x", description: "d", behavior: "command-input" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "x", description: "d", behavior: "command-input", hint: "" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects a forbidden hint on skill or execute items", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "skill", name: "x", description: "d", behavior: "insert", hint: "nope" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "x", description: "d", behavior: "execute", hint: "nope" }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects a non-boolean command-input acceptsImages", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{
+        source: "command",
+        name: "x",
+        description: "d",
+        behavior: "command-input",
+        hint: "h",
+        acceptsImages: "yes",
+      }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects acceptsImages outside command-input", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "command", name: "x", description: "d", behavior: "execute", acceptsImages: true }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [{ source: "skill", name: "x", description: "d", behavior: "insert", acceptsImages: false }],
+      availability: { commands: true, skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects malformed availability", () => {
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [],
+      availability: { commands: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "slashItems",
+      requestId: "r1",
+      items: [],
+      availability: { commands: "yes", skills: true },
+    })).toBe(false);
+  });
+
+  it("rejects malformed image attachments on executeSlashCommand", () => {
+    expect(isInboundMessage({
+      kind: "executeSlashCommand",
+      line: "/goal ship it",
+      images: [{ mediaType: "image/svg+xml", data: "AA==" }],
+    })).toBe(false);
+    expect(isInboundMessage({
+      kind: "executeSlashCommand",
+      line: "/goal ship it",
+      images: "not-an-array",
+    })).toBe(false);
+  });
+});
+
+describe("protocol v4", () => {
+  it("uses protocol v4", () => {
+    expect(PROTOCOL_VERSION).toBe(4);
   });
 
   it("accepts reference search and raster image submit records", () => {
