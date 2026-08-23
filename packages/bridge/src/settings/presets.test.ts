@@ -5,6 +5,7 @@ import {
   buildAgentPresetsView,
   copyAgentPreset,
   deleteAgentPreset,
+  MAX_PRESETS,
   readAgentPreset,
 } from "./presets.js";
 
@@ -129,10 +130,10 @@ describe("agent preset settings adapter", () => {
     await ctx.fiber.dispose();
   });
 
-  it("rejects a new destination at the 64-preset limit before writing", async () => {
+  it("rejects a new destination at the roster limit before writing", async () => {
     const ctx = new Context();
     const copy = vi.fn(async () => {});
-    let listed = Array.from({ length: 64 }, (_, index) => ({
+    let listed = Array.from({ length: MAX_PRESETS }, (_, index) => ({
       id: `preset-${index}`,
       trust: "system" as const,
       path: `/system/preset-${index}/cordis.yml`,
@@ -143,10 +144,10 @@ describe("agent preset settings adapter", () => {
     } as never);
 
     await expect(copyAgentPreset(ctx, "preset-0", "new-preset", "New Preset"))
-      .rejects.toThrow("at most 64 presets");
+      .rejects.toThrow(`at most ${MAX_PRESETS} presets`);
     expect(copy).not.toHaveBeenCalled();
 
-    listed = listed.slice(0, 63);
+    listed = listed.slice(0, MAX_PRESETS - 1);
     await expect(copyAgentPreset(ctx, "preset-0", "new-preset", "New Preset"))
       .resolves.toBeUndefined();
     expect(copy).toHaveBeenCalledWith("preset-0", "new-preset", "New Preset");
@@ -197,16 +198,26 @@ describe("agent preset settings adapter", () => {
   });
 
   it("fails closed when the roster exceeds its projection bound", async () => {
-    const ctx = new Context();
-    ctx.provide("agentPresets", {
-      list: async () => Array.from({ length: 65 }, (_, index) => ({
-        id: `preset-${index}`,
-        trust: "system",
-        path: `/system/preset-${index}/cordis.yml`,
-      })),
-    } as never);
+    const contextFor = (count: number) => {
+      const ctx = new Context();
+      ctx.provide("agentPresets", {
+        list: async () => Array.from({ length: count }, (_, index) => ({
+          id: `preset-${index}`,
+          trust: "system",
+          path: `/system/preset-${index}/cordis.yml`,
+        })),
+      } as never);
+      return ctx;
+    };
 
-    await expect(buildAgentPresetsView(ctx)).rejects.toThrow("at most 64 presets");
-    await ctx.fiber.dispose();
+    const overflow = contextFor(MAX_PRESETS + 1);
+    await expect(buildAgentPresetsView(overflow))
+      .rejects.toThrow(`at most ${MAX_PRESETS} presets`);
+    await overflow.fiber.dispose();
+
+    const atCap = contextFor(MAX_PRESETS);
+    const view = await buildAgentPresetsView(atCap);
+    expect(view.presets).toHaveLength(MAX_PRESETS);
+    await atCap.fiber.dispose();
   });
 });

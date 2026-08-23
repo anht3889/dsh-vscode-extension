@@ -8,7 +8,11 @@ import type {
 import { projectNamespace } from "./project.js";
 
 const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/;
-const MAX_PRESETS = 64;
+/**
+ * Agent presets one roster view may project before it fails closed. General
+ * lists the same roster, so `MAX_GENERAL_CHOICES` matches this value.
+ */
+export const MAX_PRESETS = 256;
 const MAX_PRESET_ID_LENGTH = 64;
 const MAX_PRESET_NAME_LENGTH = 128;
 const MAX_PRESET_CONTENT_BYTES = 256 * 1024;

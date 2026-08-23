@@ -10,10 +10,31 @@ import type {
 import { projectNamespace } from "./project.js";
 import { projectSchemaFields } from "./schema.js";
 
-const MAX_PROVIDERS = 24;
-const MAX_MODELS_PER_PROVIDER = 24;
-const MAX_VIEW_NODES = 3_000;
-const MAX_VIEW_DEPTH = 20;
+/**
+ * Configurable providers one Models view may address before it fails closed.
+ * The directory is the pi-ai builtin catalog (37 providers at 0.82.1) plus the
+ * routes a user declares, so this leaves room for years of upstream additions.
+ */
+export const MAX_PROVIDERS = 128;
+/**
+ * Models retained per provider catalog; a longer catalog is truncated to this
+ * prefix and stays `ready`. The largest builtin catalog is OpenRouter at 276.
+ */
+export const MAX_MODELS_PER_PROVIDER = 512;
+/**
+ * Aggregate node ceiling for one emitted Models view, the largest of the four
+ * settings sections. Saturating every entity cap at once costs 128 provider
+ * records at roughly 55 nodes each, one catalog of 512 models at 4 nodes each,
+ * a credential record per provider, and up to four namespaces at their
+ * projection ceiling — about 26,000 nodes. The contract wire scan budget must
+ * stay above this ceiling or the bridge emits messages the validator rejects.
+ */
+export const MAX_VIEW_NODES = 32_768;
+/**
+ * Depth ceiling for one emitted Models view. A namespace layer sits three
+ * levels below the view root and may itself nest to the projection depth.
+ */
+const MAX_VIEW_DEPTH = 24;
 const EDITABLE_PROFILE_FIELDS = [
   { name: "apiKeyEnv", label: "API key reference" },
   { name: "displayName", label: "Display name" },
@@ -69,10 +90,8 @@ async function catalogFor(
   }
   try {
     const listed = await ctx.llm.listModels(provider);
-    if (listed.length > MAX_MODELS_PER_PROVIDER) {
-      throw new Error(`provider "${provider}" exceeds the Models catalog limit`);
-    }
-    const resolved = await Promise.all(listed.map(async (model) => {
+    const bounded = listed.slice(0, MAX_MODELS_PER_PROVIDER);
+    const resolved = await Promise.all(bounded.map(async (model) => {
       try {
         const info = await ctx.llm.resolveModelInfo(provider, model.id);
         return {

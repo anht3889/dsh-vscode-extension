@@ -5,7 +5,11 @@ import {
   type SettingsDescriptor,
 } from "@deepseek-ai/dsh-settings";
 import { isOutboundMessage } from "@dsh-vscode/contract";
-import { projectNamespace, projectSettingsError } from "./project.js";
+import {
+  MAX_COLLECTION_ENTRIES,
+  projectNamespace,
+  projectSettingsError,
+} from "./project.js";
 
 const descriptor = (overrides: Partial<SettingsDescriptor> = {}): SettingsDescriptor => ({
   ns: settingsNamespace("provider-test"),
@@ -68,12 +72,53 @@ describe("settings projection", () => {
     expect(isOutboundMessage(message)).toBe(true);
   });
 
-  it("rejects a projection whose records could exceed the protocol scan guard", () => {
-    const oversized = Object.fromEntries(
-      Array.from({ length: 600 }, (_, index) => [`field${index}`, index]),
+  it("projects the llm-pi-ai namespace a configured install writes", () => {
+    // `llm-pi-ai.providers` holds one profile per configured provider, and each
+    // profile may pin its own model list; 24 such profiles must still project.
+    const providers = Object.fromEntries(
+      Array.from({ length: 24 }, (_, index) => [`provider-${index}`, {
+        displayName: `Provider ${index}`,
+        apiKeyEnv: `PROVIDER_${index}_API_KEY`,
+        api: "openai-completions",
+        baseURL: `https://provider-${index}.example/v1`,
+        models: Array.from({ length: 6 }, (_, model) => ({
+          id: `model-${model}`,
+          name: `Model ${model}`,
+        })),
+      }]),
     );
 
-    expect(() => projectNamespace(descriptor({ value: oversized }), true))
+    const projected = projectNamespace(descriptor({
+      ns: settingsNamespace("llm-pi-ai"),
+      base: {},
+      user: { providers },
+      value: { providers: structuredClone(providers) },
+      secrets: [],
+    }), true);
+
+    expect(Object.keys(projected.value.providers as object)).toHaveLength(24);
+  });
+
+  it("rejects a projection whose records could exceed the protocol scan guard", () => {
+    const wideCollection = Object.fromEntries(
+      Array.from(
+        { length: MAX_COLLECTION_ENTRIES + 1 },
+        (_, index) => [`field${index}`, index],
+      ),
+    );
+    expect(() => projectNamespace(descriptor({ value: wideCollection }), true))
+      .toThrow(/projection limit/);
+
+    const deepCollection = Object.fromEntries(
+      Array.from({ length: MAX_COLLECTION_ENTRIES }, (_, index) => [
+        `group${index}`,
+        Object.fromEntries(Array.from(
+          { length: MAX_COLLECTION_ENTRIES },
+          (_, leaf) => [`field${leaf}`, leaf],
+        )),
+      ]),
+    );
+    expect(() => projectNamespace(descriptor({ value: deepCollection }), true))
       .toThrow(/projection limit/);
   });
 });

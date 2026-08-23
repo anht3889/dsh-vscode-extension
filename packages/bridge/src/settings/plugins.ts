@@ -10,9 +10,23 @@ import type {
 import { projectNamespace } from "./project.js";
 import { projectSchemaFields } from "./schema.js";
 
-const MAX_INVENTORY_ENTRIES = 64;
-const MAX_VIEW_NODES = 2_000;
-const MAX_VIEW_DEPTH = 16;
+/**
+ * Loader inventory entries one Plugins view may project before it fails closed.
+ * `@deepseek-ai/dsh-base` alone composes 79 entries and the bridge patch plus
+ * user bundles add more, so this leaves room for several times a stock install.
+ */
+export const MAX_INVENTORY_ENTRIES = 512;
+/**
+ * Aggregate node ceiling for one emitted Plugins view: the inventory cap at
+ * 5 nodes per record plus the three configurable-card namespaces at their
+ * projection ceiling.
+ */
+export const MAX_VIEW_NODES = 16_384;
+/**
+ * Depth ceiling for one emitted Plugins view. A namespace layer sits three
+ * levels below the view root and may itself nest to the projection depth.
+ */
+const MAX_VIEW_DEPTH = 24;
 const DEFAULT_WEB_SEARCH_CREDENTIAL = "DEEPSEEK_API_KEY";
 
 const CARDS = [

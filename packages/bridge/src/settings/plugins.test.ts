@@ -2,7 +2,20 @@ import { Context } from "@deepseek-ai/cordis";
 import { settingsNamespace, type SettingsDescriptor } from "@deepseek-ai/dsh-settings";
 import { isSettingsOutboundMessage } from "@dsh-vscode/contract";
 import { describe, expect, it, vi } from "vitest";
-import { buildPluginsView } from "./plugins.js";
+import {
+  buildPluginsView,
+  MAX_INVENTORY_ENTRIES,
+  MAX_VIEW_NODES,
+} from "./plugins.js";
+
+function inventoryEntries(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    entryId: `entry-${index}`,
+    moduleName: `plugin-${index}`,
+    enabled: true,
+    fiberPhase: null,
+  }));
+}
 
 const schema = {
   uid: 1,
@@ -205,27 +218,55 @@ describe("buildPluginsView", () => {
     await ctx.fiber.dispose();
   });
 
-  it("fails closed when inventory exceeds its bounded projection", async () => {
+  it("projects the inventory a real dsh-base composition mounts", async () => {
+    // `@deepseek-ai/dsh-base/cordis.patch.yml` alone composes 79 entries, and the
+    // bridge patch plus user bundles add more; a stock install exceeded the old cap.
     const ctx = new Context();
     ctx.provide("settings", { writable: true, describe: () => [] } as never);
     ctx.provide("pluginInventory", {
-      list: () => ({
-        entries: Array.from({ length: 65 }, (_, index) => ({
-          entryId: `entry-${index}`,
-          moduleName: `plugin-${index}`,
-          enabled: true,
-          fiberPhase: null,
-        })),
-      }),
+      list: () => ({ entries: inventoryEntries(120) }),
     } as never);
 
-    await expect(buildPluginsView(ctx)).rejects.toThrow("at most 64 inventory entries");
+    const view = await buildPluginsView(ctx);
+
+    expect(view.inventory).toHaveLength(120);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "plugins",
+      view,
+    })).toBe(true);
     await ctx.fiber.dispose();
+  });
+
+  it("fails closed when inventory exceeds its bounded projection", async () => {
+    const contextFor = (count: number) => {
+      const ctx = new Context();
+      ctx.provide("settings", { writable: true, describe: () => [] } as never);
+      ctx.provide("pluginInventory", {
+        list: () => ({ entries: inventoryEntries(count) }),
+      } as never);
+      return ctx;
+    };
+
+    const overflow = contextFor(MAX_INVENTORY_ENTRIES + 1);
+    await expect(buildPluginsView(overflow)).rejects.toThrow(
+      `at most ${MAX_INVENTORY_ENTRIES} inventory entries`,
+    );
+    await overflow.fiber.dispose();
+
+    const atCap = contextFor(MAX_INVENTORY_ENTRIES);
+    const view = await buildPluginsView(atCap);
+    expect(view.inventory).toHaveLength(MAX_INVENTORY_ENTRIES);
+    await atCap.fiber.dispose();
   });
 
   it("fails closed when the complete Plugins view exceeds projection bounds", async () => {
     const ctx = new Context();
-    const options = Array.from({ length: 700 }, (_, index) => index + 10);
+    // Each union option costs three projected nodes: record, value, and label.
+    const options = Array.from(
+      { length: MAX_VIEW_NODES },
+      (_, index) => index + 10,
+    );
     const oversizedSchema = {
       uid: 1,
       refs: {

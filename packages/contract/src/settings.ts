@@ -322,7 +322,22 @@ const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Bounds for recursive wire payload scans; exceed → fail closed. */
 const MAX_WIRE_SCAN_DEPTH = 32;
-const MAX_WIRE_SCAN_NODES = 4096;
+/**
+ * The largest payload a producer may emit is one `settingsSection` message
+ * carrying a Models view: 128 configurable providers at roughly 55 nodes each,
+ * one catalog of 512 models at 4 nodes each, a credential record per provider,
+ * and up to four namespaces at their 4,096-node projection ceiling — about
+ * 26,000 nodes, which the bridge caps at 32,768 before it emits. This budget is
+ * twice that ceiling, covering the message envelope and later sections while
+ * keeping the scan bounded.
+ */
+const MAX_WIRE_SCAN_NODES = 65_536;
+
+/**
+ * Node budget the credential-leak and prototype-pollution scans allow per message.
+ * Producers must keep every emitted payload below it; a larger payload is rejected.
+ */
+export const SETTINGS_WIRE_SCAN_NODE_LIMIT = MAX_WIRE_SCAN_NODES;
 
 export const SETTINGS_INBOUND_KINDS = [
   "getSettingsSection",

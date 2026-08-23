@@ -5,7 +5,24 @@ import {
   type SettingsDescriptor,
 } from "@deepseek-ai/dsh-settings";
 import { isSettingsOutboundMessage } from "@dsh-vscode/contract";
-import { buildModelsView } from "./models.js";
+import {
+  buildModelsView,
+  MAX_MODELS_PER_PROVIDER,
+  MAX_PROVIDERS,
+} from "./models.js";
+
+/** `getBuiltinProviders()` from `@earendil-works/pi-ai/providers/all` at 0.82.1. */
+const PI_AI_BUILTIN_PROVIDERS = [
+  "amazon-bedrock", "ant-ling", "anthropic", "azure-openai-responses",
+  "cerebras", "cloudflare-ai-gateway", "cloudflare-workers-ai", "deepseek",
+  "fireworks", "github-copilot", "google", "google-vertex", "groq",
+  "huggingface", "kimi-coding", "minimax", "minimax-cn", "mistral",
+  "moonshotai", "moonshotai-cn", "nvidia", "openai", "openai-codex",
+  "opencode", "opencode-go", "openrouter", "qwen-token-plan",
+  "qwen-token-plan-cn", "together", "vercel-ai-gateway", "xai", "xiaomi",
+  "xiaomi-token-plan-ams", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp",
+  "zai", "zai-coding-cn",
+];
 
 const profileSchema = {
   uid: 1,
@@ -459,57 +476,104 @@ describe("buildModelsView", () => {
     await ctx.fiber.dispose();
   });
 
-  it("fails closed at provider and model projection limits", async () => {
-    const providerOverflow = new Context();
-    providerOverflow.provide("settings", {
-      writable: true,
-      describe: () => [],
-    } as never);
-    providerOverflow.provide("llm", {
-      listConfigurableProviders: () => Array.from({ length: 25 }, (_, index) => ({
-        provider: `provider-${index}`,
-        displayName: `Provider ${index}`,
+  it("renders the pi-ai builtin directory a real install exposes", async () => {
+    const ctx = new Context();
+    // `llm.listConfigurableProviders()` returns the pi-ai builtin catalog plus
+    // declared routes; a stock install already exceeded the former cap of 24.
+    const directory = [
+      ...PI_AI_BUILTIN_PROVIDERS,
+      "nvidia-inference-hub",
+      "h200",
+    ];
+    ctx.provide("settings", { writable: true, describe: () => [] } as never);
+    ctx.provide("llm", {
+      listConfigurableProviders: () => directory.map((provider) => ({
+        provider,
+        displayName: provider,
         settingsNs: "llm-pi-ai",
-        settingsPath: ["providers", `provider-${index}`],
+        settingsPath: ["providers", provider],
       })),
       listProviders: () => [],
     } as never);
 
-    await expect(buildModelsView(providerOverflow)).rejects.toThrow(
-      "supports at most 24 configurable providers",
-    );
-    await providerOverflow.fiber.dispose();
+    const view = await buildModelsView(ctx);
 
-    const modelOverflow = new Context();
-    const resolveModelInfo = vi.fn();
-    modelOverflow.provide("settings", {
-      writable: true,
-      describe: () => [],
-    } as never);
-    modelOverflow.provide("llm", {
-      listConfigurableProviders: () => [{
-        provider: "openai",
-        displayName: "OpenAI",
+    expect(view.providers).toHaveLength(directory.length);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "models",
+      view,
+    })).toBe(true);
+    await ctx.fiber.dispose();
+  });
+
+  it("fails closed above the configurable provider cap", async () => {
+    const providerEntries = (count: number) => Array.from(
+      { length: count },
+      (_, index) => ({
+        provider: `provider-${index}`,
+        displayName: `Provider ${index}`,
         settingsNs: "llm-pi-ai",
-        settingsPath: ["providers", "openai"],
+        settingsPath: ["providers", `provider-${index}`],
+      }),
+    );
+    const contextFor = (count: number) => {
+      const ctx = new Context();
+      ctx.provide("settings", { writable: true, describe: () => [] } as never);
+      ctx.provide("llm", {
+        listConfigurableProviders: () => providerEntries(count),
+        listProviders: () => [],
+      } as never);
+      return ctx;
+    };
+
+    const overflow = contextFor(MAX_PROVIDERS + 1);
+    await expect(buildModelsView(overflow)).rejects.toThrow(
+      `supports at most ${MAX_PROVIDERS} configurable providers`,
+    );
+    await overflow.fiber.dispose();
+
+    const atCap = contextFor(MAX_PROVIDERS);
+    await expect(buildModelsView(atCap)).resolves.toEqual(
+      expect.objectContaining({ section: "models" }),
+    );
+    await atCap.fiber.dispose();
+  });
+
+  it("truncates an oversized catalog instead of reporting it unavailable", async () => {
+    const ctx = new Context();
+    ctx.provide("settings", { writable: true, describe: () => [] } as never);
+    ctx.provide("llm", {
+      listConfigurableProviders: () => [{
+        provider: "openrouter",
+        displayName: "OpenRouter",
+        settingsNs: "llm-pi-ai",
+        settingsPath: ["providers", "openrouter"],
       }],
-      listProviders: () => [{ id: "openai", name: "OpenAI" }],
-      listModels: async () => Array.from({ length: 25 }, (_, index) => ({
-        provider: "openai",
-        id: `model-${index}`,
-        name: `Model ${index}`,
-      })),
-      resolveModelInfo,
+      listProviders: () => [{ id: "openrouter", name: "OpenRouter" }],
+      listModels: async () => Array.from(
+        { length: MAX_MODELS_PER_PROVIDER + 3 },
+        (_, index) => ({
+          provider: "openrouter",
+          id: `model-${index}`,
+          name: `Model ${index}`,
+        }),
+      ),
+      resolveModelInfo: async (provider: string, model: string) => ({
+        provider,
+        id: model,
+        name: model,
+      }),
     } as never);
 
-    const view = await buildModelsView(modelOverflow);
+    const view = await buildModelsView(ctx);
 
-    expect(view.providers[0]?.catalog).toEqual({
-      kind: "failed",
-      message: "Model catalog is unavailable",
-    });
-    expect(view.providers[0]?.models).toEqual([]);
-    expect(resolveModelInfo).not.toHaveBeenCalled();
-    await modelOverflow.fiber.dispose();
+    expect(view.providers[0]?.catalog).toEqual({ kind: "ready" });
+    expect(view.providers[0]?.models).toHaveLength(MAX_MODELS_PER_PROVIDER);
+    expect(view.providers[0]?.models[0]?.id).toBe("model-0");
+    expect(view.providers[0]?.models.at(-1)?.id).toBe(
+      `model-${MAX_MODELS_PER_PROVIDER - 1}`,
+    );
+    await ctx.fiber.dispose();
   });
 });

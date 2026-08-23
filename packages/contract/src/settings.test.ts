@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isSettingsInboundCommand,
   isSettingsOutboundMessage,
+  SETTINGS_WIRE_SCAN_NODE_LIMIT,
 } from "./settings.js";
 import { isInboundMessage, isOutboundMessage } from "./protocol.js";
 
@@ -970,6 +971,67 @@ describe("isSettingsOutboundMessage", () => {
         }],
         agentPresets: [],
         permissionPresets: [],
+      },
+    })).toBe(false);
+  });
+
+  it("admits a legitimate payload filling the wire scan budget", () => {
+    // Four nodes per model entry: the record plus `id`, `label`, `contextWindow`.
+    const models = Array.from(
+      { length: Math.floor((SETTINGS_WIRE_SCAN_NODE_LIMIT - 64) / 4) },
+      (_, index) => ({
+        id: `model-${index}`,
+        label: `Model ${index}`,
+        contextWindow: 128_000,
+      }),
+    );
+
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "s1",
+      view: {
+        section: "models",
+        namespaces: [],
+        providers: [{
+          id: "openrouter",
+          namespace: "llm-pi-ai",
+          label: "OpenRouter",
+          active: true,
+          catalog: { kind: "ready" },
+          credentialStatus: { kind: "none" },
+          models,
+          removable: true,
+          fields: [],
+        }],
+        credentials: [],
+      },
+    })).toBe(true);
+  });
+
+  it("still fails closed beyond the wire scan budget", () => {
+    const models = Array.from(
+      { length: SETTINGS_WIRE_SCAN_NODE_LIMIT },
+      (_, index) => ({ id: `model-${index}`, label: `Model ${index}` }),
+    );
+
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "s1",
+      view: {
+        section: "models",
+        namespaces: [],
+        providers: [{
+          id: "openrouter",
+          namespace: "llm-pi-ai",
+          label: "OpenRouter",
+          active: true,
+          catalog: { kind: "ready" },
+          credentialStatus: { kind: "none" },
+          models,
+          removable: true,
+          fields: [],
+        }],
+        credentials: [],
       },
     })).toBe(false);
   });

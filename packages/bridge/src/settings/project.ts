@@ -7,9 +7,21 @@ import type {
   SettingsNamespaceWire,
 } from "@dsh-vscode/contract";
 
-const MAX_PROJECTED_NODES = 512;
-const MAX_PROJECTED_DEPTH = 16;
-const MAX_COLLECTION_ENTRIES = 64;
+/**
+ * Node ceiling shared by the base, user, value, and secrets layers of one
+ * namespace. The largest namespace a real install writes is `llm-pi-ai`, whose
+ * `providers` map holds one profile per configured provider and may pin a model
+ * list per profile; 24 such profiles cost roughly 1,900 nodes across the layers.
+ */
+export const MAX_PROJECTED_NODES = 4_096;
+/** Nesting a namespace layer may reach below its own root. */
+export const MAX_PROJECTED_DEPTH = 16;
+/**
+ * Entries admitted in any single projected array or object of a namespace layer.
+ * A `providers` map may name every configurable provider the Models directory
+ * addresses, so this stays above that directory cap.
+ */
+export const MAX_COLLECTION_ENTRIES = 256;
 
 interface ProjectionState {
   nodes: number;

@@ -4,7 +4,12 @@ import type { GeneralSettingsView } from "@dsh-vscode/contract";
 import { GENERAL_NAMESPACES } from "./general-namespaces.js";
 import { projectNamespace } from "./project.js";
 
-const MAX_GENERAL_CHOICES = 64;
+/**
+ * Agent-preset and permission-preset choices one General view may list before
+ * it truncates. It matches `MAX_PRESETS` so the General row never drops a
+ * preset the Agent Presets roster still accepts.
+ */
+export const MAX_GENERAL_CHOICES = 256;
 
 /** Build the mounted, redacted settings and choice lists shown by General. */
 export async function buildGeneralView(

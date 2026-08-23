@@ -321,6 +321,14 @@ interface SettingsPathMessage {
 
 Provider, plugin, inventory, and preset wire records expose only fields required by the settings UI. Opaque ids use named aliases in the dependency-free contract and are converted to DSH branded ids in the bridge.
 
+### Projection bounds
+
+Every bound is a safety valve sized above a realistic install, never a product limit. The bridge caps entity counts per section — configurable providers, models per provider catalog, loader inventory entries, agent presets, General choices — and caps the aggregate node and depth of each emitted view. A namespace layer carries its own node, depth, and collection-entry ceilings, because it projects arbitrary user settings values.
+
+The contract scans every outbound message for credential-value field names, forbidden prototype keys, and cycles, and fails closed when it exhausts its node or depth budget. That budget must therefore stay above the largest view the bridge can emit; otherwise a legitimate large message is rejected as a suspected leak. `packages/bridge/test/settings-wire-bounds.test.ts` builds a view at each bridge cap and asserts the contract validator accepts it, so raising a bridge cap without raising the scan budget fails the suite.
+
+A provider catalog longer than the per-provider cap is truncated to its leading models and stays `ready`. Truncation never reports a working provider as `failed`.
+
 ### Mutation and conflict flow
 
 1. The webview reads the namespace revision from the latest section view.
