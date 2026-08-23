@@ -62,8 +62,8 @@ describe("General settings view", () => {
       "ui-conversation",
     ]);
     expect(view.agentPresets).toEqual([
-      { id: "standard", label: "Standard" },
-      { id: "mine", label: "mine" },
+      { id: "standard", label: "Standard", trust: "system" },
+      { id: "mine", label: "mine", trust: "user" },
     ]);
     expect(view.permissionPresets).toEqual([
       { id: "workspace-write", label: "Workspace Write", dangerous: false },

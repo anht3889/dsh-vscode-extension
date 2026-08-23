@@ -3,6 +3,7 @@ import type {
   GeneralSettingsView,
 } from "@dsh-vscode/contract";
 import { settingsText } from "../../localization/index.js";
+import { resolvePresetDisplayCopy } from "../../presetCopy.js";
 import type { SettingsLocale } from "../../types.js";
 import {
   GeneralController,
@@ -41,7 +42,9 @@ function options(
     case "agent-preset":
       return view.agentPresets.map((option) => ({
         value: option.id,
-        label: option.label,
+        label: resolvePresetDisplayCopy(locale, option.trust, option.id, {
+          name: option.label,
+        }).name ?? option.label,
       }));
     case "permission":
       return view.permissionPresets.map((option) => ({

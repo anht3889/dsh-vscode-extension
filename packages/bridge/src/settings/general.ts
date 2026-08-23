@@ -33,6 +33,7 @@ export async function buildGeneralView(
       .map((preset: AgentPreset) => ({
         id: preset.id,
         label: preset.name ?? preset.id,
+        trust: preset.trust,
       }));
 
   const permissionPresets = ctx.get("permissionPresets");

@@ -129,7 +129,7 @@ const FULL_GENERAL = {
       secrets: [],
     },
   ],
-  agentPresets: [{ id: "standard", label: "Standard" }],
+  agentPresets: [{ id: "standard", label: "Standard", trust: "system" as const }],
   permissionPresets: [
     { id: "workspace-write", label: "Workspace Write", dangerous: false },
     { id: "danger-full-access", label: "Full Access", dangerous: true },
@@ -964,7 +964,7 @@ describe("App settings shell", () => {
       requestId: presetsRead.requestId,
       view: AGENT_PRESETS,
     });
-    fireEvent.click(screen.getByRole("button", { name: "Copy Standard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy Standard Mode" }));
     fireEvent.change(screen.getByLabelText("Identifier"), {
       target: { value: "draft-copy" },
     });
@@ -1011,7 +1011,7 @@ describe("App settings shell", () => {
     expect(screen.getByLabelText("Timeout (ms)")).toHaveValue(10_000);
     expect(screen.getByLabelText("Maximum parallel tool calls")).toHaveValue(4);
     fireEvent.click(screen.getByRole("button", { name: "Agent Presets" }));
-    fireEvent.click(screen.getByRole("button", { name: "Copy Standard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy Standard Mode" }));
     expect(screen.getByLabelText("Identifier")).toHaveValue("");
   });
 
@@ -2464,7 +2464,7 @@ describe("App settings shell", () => {
     host({ kind: "settingsSection", requestId: request.requestId, view: AGENT_PRESETS });
     expect(screen.queryByText(/not available in this version/i)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "View Standard" }));
+    fireEvent.click(screen.getByRole("button", { name: "View Standard Mode" }));
     const read = commands("readAgentPreset")[0];
     if (read?.kind !== "readAgentPreset") throw new Error("expected preset read");
     host({
@@ -2477,7 +2477,7 @@ describe("App settings shell", () => {
         content: "<script>hostile()</script>",
       },
     });
-    const viewer = screen.getByRole("dialog", { name: "Preset content · Standard" });
+    const viewer = screen.getByRole("dialog", { name: "Preset content · Standard Mode" });
     expect(viewer.querySelector("pre")).toHaveTextContent("<script>hostile()</script>");
     expect(viewer.querySelector("script")).toBeNull();
 
@@ -2500,7 +2500,7 @@ describe("App settings shell", () => {
     );
     if (request?.kind !== "getSettingsSection") throw new Error("expected preset request");
     host({ kind: "settingsSection", requestId: request.requestId, view: AGENT_PRESETS });
-    fireEvent.click(screen.getByRole("button", { name: "Copy Standard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy Standard Mode" }));
     fireEvent.change(screen.getByLabelText("Identifier"), {
       target: { value: "my-copy" },
     });
@@ -2568,12 +2568,12 @@ describe("App settings shell", () => {
       view: {
         ...AGENT_PRESETS,
         presets: AGENT_PRESETS.presets.map((preset) =>
-          preset.id === "standard" ? { ...preset, name: "Fresh Standard" } : preset),
+          preset.id === "mine" ? { ...preset, name: "Fresh Mine" } : preset),
       },
     });
     host({ kind: "settingsSection", requestId: stale.requestId, view: AGENT_PRESETS });
-    expect(screen.getByRole("button", { name: "View Fresh Standard" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "View Standard" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Fresh Mine" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Open Mine" })).toBeNull();
   });
 
   it("ignores a late preset mutation after disconnect and preserves its copy draft", () => {
@@ -2587,7 +2587,7 @@ describe("App settings shell", () => {
     );
     if (request?.kind !== "getSettingsSection") throw new Error("expected preset request");
     host({ kind: "settingsSection", requestId: request.requestId, view: AGENT_PRESETS });
-    fireEvent.click(screen.getByRole("button", { name: "Copy Standard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy Standard Mode" }));
     fireEvent.change(screen.getByLabelText("Identifier"), {
       target: { value: "pending-copy" },
     });
@@ -2600,7 +2600,7 @@ describe("App settings shell", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
     expect(screen.getByRole("dialog", {
-      name: "Copy Agent Preset · Standard",
+      name: "Copy Agent Preset · Standard Mode",
     })).toBeVisible();
 
     host({ kind: "hostDisconnected", detail: "restart" });
@@ -2612,7 +2612,7 @@ describe("App settings shell", () => {
     expect(screen.getByLabelText("Identifier")).toHaveValue("pending-copy");
     expect(screen.getByLabelText("Name")).toHaveValue("Pending Copy");
     expect(screen.getByRole("dialog", {
-      name: "Copy Agent Preset · Standard",
+      name: "Copy Agent Preset · Standard Mode",
     })).toBeVisible();
   });
 });

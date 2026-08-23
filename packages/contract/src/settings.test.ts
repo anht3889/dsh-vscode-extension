@@ -333,7 +333,7 @@ describe("isSettingsOutboundMessage", () => {
       view: {
         section: "general",
         namespaces: [generalNamespace],
-        agentPresets: [{ id: "standard", label: "Standard" }],
+        agentPresets: [{ id: "standard", label: "Standard", trust: "system" }],
         permissionPresets: [{ id: "workspace-write", label: "Workspace Write", dangerous: false }],
       },
     })).toBe(true);
@@ -388,6 +388,31 @@ describe("isSettingsOutboundMessage", () => {
         }],
       },
     })).toBe(true);
+  });
+
+  it("requires a closed trust tag on general agent-preset choices", () => {
+    const view = (agentPresets: unknown) => ({
+      kind: "settingsSection" as const,
+      requestId: "s1",
+      view: {
+        section: "general" as const,
+        namespaces: [generalNamespace],
+        agentPresets,
+        permissionPresets: [
+          { id: "workspace-write", label: "Workspace Write", dangerous: false },
+        ],
+      },
+    });
+    expect(isSettingsOutboundMessage(view([
+      { id: "standard", label: "Standard", trust: "system" },
+      { id: "mine", label: "Mine", trust: "user" },
+    ]))).toBe(true);
+    expect(isSettingsOutboundMessage(view([
+      { id: "standard", label: "Standard" },
+    ]))).toBe(false);
+    expect(isSettingsOutboundMessage(view([
+      { id: "standard", label: "Standard", trust: "root" },
+    ]))).toBe(false);
   });
 
   it("accepts settingsMutation results", () => {
@@ -579,7 +604,7 @@ describe("isSettingsOutboundMessage", () => {
       view: {
         section: "general",
         namespaces: [],
-        agentPresets: [{ id: "standard", label: "Standard", prototype: "x" }],
+        agentPresets: [{ id: "standard", label: "Standard", trust: "system", prototype: "x" }],
         permissionPresets: [],
       },
     })).toBe(false);

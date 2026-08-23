@@ -40,7 +40,7 @@ function general(): GeneralSettingsView {
       ns("ui-theme", 4, { preference: "system" }),
       ns("ui-conversation", 5, { busyEnter: "queue" }),
     ],
-    agentPresets: [{ id: "standard", label: "Standard" }],
+    agentPresets: [{ id: "standard", label: "Standard", trust: "system" }],
     permissionPresets: [
       { id: "workspace-write", label: "Workspace Write", dangerous: false },
       { id: "danger-full-access", label: "Full Access", dangerous: true },
@@ -190,6 +190,25 @@ describe("GeneralSection", () => {
       target: { value: "zh" },
     });
     expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
+  });
+
+  it("shows English names for system presets and keeps user-authored labels", () => {
+    const value = general();
+    value.agentPresets = [
+      { id: "standard", label: "标准模式", trust: "system" },
+      { id: "mine", label: "My Coding Agent", trust: "user" },
+    ];
+    render(
+      <GeneralSection
+        controller={new GeneralController(vi.fn(), vi.fn())}
+        view={value}
+        locale="en"
+        confirmFullAccess={vi.fn(async () => true)}
+      />,
+    );
+    expect(screen.getByRole("option", { name: "Standard Mode" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "My Coding Agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "标准模式" })).toBeNull();
   });
 
   it("hides missing namespaces and shows unknown locale as a disabled error", () => {

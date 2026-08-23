@@ -87,21 +87,23 @@ describe("AgentPresetsSection", () => {
     setup();
     expect(screen.getByRole("heading", { name: "Built in" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "User" })).toBeVisible();
-    expect(screen.getByText("Built in preset")).toBeVisible();
+    expect(screen.getByText(
+      "A full-featured coding agent with file editing, shell, file and web search, skills, plan, goals, subagents, and workflows.",
+    )).toBeVisible();
     expect(screen.getByText("Personal preset")).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent("invalid YAML");
     expect(screen.getByText("Default")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Set Standard as default" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "View Standard" }))
+    expect(screen.getByRole("button", { name: "Set Standard Mode as default" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "View Standard Mode" }))
       .toHaveTextContent("View");
-    expect(screen.queryByRole("button", { name: "Delete Standard" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete Standard Mode" })).toBeNull();
     expect(screen.getByRole("button", { name: "Open Mine" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Delete Mine" })).toBeEnabled();
   });
 
   it("renders exact hostile YAML as inert preformatted text", () => {
     const { controller } = setup();
-    fireEvent.click(screen.getByRole("button", { name: "View Standard" }));
+    fireEvent.click(screen.getByRole("button", { name: "View Standard Mode" }));
     act(() => {
       controller.receiveContent({
         kind: "agentPresetContent",
@@ -114,7 +116,7 @@ describe("AgentPresetsSection", () => {
         },
       });
     });
-    const viewer = screen.getByRole("dialog", { name: "Preset content · Standard" });
+    const viewer = screen.getByRole("dialog", { name: "Preset content · Standard Mode" });
     expect(viewer.querySelector("pre")).toHaveTextContent(
       "<img src=x onerror=alert(1)> <script>alert(2)</script>",
     );
@@ -124,9 +126,9 @@ describe("AgentPresetsSection", () => {
 
   it("traps viewer focus, closes on Escape, and returns focus", () => {
     const { controller } = setup();
-    const invoke = screen.getByRole("button", { name: "View Standard" });
+    const invoke = screen.getByRole("button", { name: "View Standard Mode" });
     fireEvent.click(invoke);
-    const viewer = screen.getByRole("dialog", { name: "Preset content · Standard" });
+    const viewer = screen.getByRole("dialog", { name: "Preset content · Standard Mode" });
     const close = within(viewer).getByRole("button", { name: "Close settings" });
     expect(close).toHaveFocus();
     fireEvent.keyDown(document, { key: "Tab" });
@@ -140,8 +142,8 @@ describe("AgentPresetsSection", () => {
 
   it("uses a distinct validated copy dialog and marks partially entered data dirty", () => {
     const { controller, commands } = setup();
-    fireEvent.click(screen.getByRole("button", { name: "Copy Standard" }));
-    const dialog = screen.getByRole("dialog", { name: "Copy Agent Preset · Standard" });
+    fireEvent.click(screen.getByRole("button", { name: "Copy Standard Mode" }));
+    const dialog = screen.getByRole("dialog", { name: "Copy Agent Preset · Standard Mode" });
     fireEvent.change(screen.getByLabelText("Identifier"), {
       target: { value: "Bad Id" },
     });
@@ -170,9 +172,9 @@ describe("AgentPresetsSection", () => {
 
   it("traps copy focus, blocks Escape while saving, and returns focus after close", () => {
     setup();
-    const invoke = screen.getByRole("button", { name: "Copy Standard" });
+    const invoke = screen.getByRole("button", { name: "Copy Standard Mode" });
     fireEvent.click(invoke);
-    const dialog = screen.getByRole("dialog", { name: "Copy Agent Preset · Standard" });
+    const dialog = screen.getByRole("dialog", { name: "Copy Agent Preset · Standard Mode" });
     const id = within(dialog).getByLabelText("Identifier");
     const cancel = within(dialog).getByRole("button", { name: "Cancel" });
     expect(id).toHaveFocus();
@@ -182,13 +184,13 @@ describe("AgentPresetsSection", () => {
     expect(id).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", {
-      name: "Copy Agent Preset · Standard",
+      name: "Copy Agent Preset · Standard Mode",
     })).toBeNull();
     expect(invoke).toHaveFocus();
 
     fireEvent.click(invoke);
     const savingDialog = screen.getByRole("dialog", {
-      name: "Copy Agent Preset · Standard",
+      name: "Copy Agent Preset · Standard Mode",
     });
     fireEvent.change(within(savingDialog).getByLabelText("Identifier"), {
       target: { value: "copy" },
@@ -198,7 +200,7 @@ describe("AgentPresetsSection", () => {
     });
     fireEvent.click(within(savingDialog).getByRole("button", { name: "Create" }));
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.getByRole("dialog", { name: "Copy Agent Preset · Standard" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Copy Agent Preset · Standard Mode" })).toBeVisible();
   });
 
   it("requires an accessible distinct fallback before deleting the default", () => {
@@ -251,6 +253,59 @@ describe("AgentPresetsSection", () => {
     expect(screen.getByTestId("settings-confirmation-scrim")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onConfirmationChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("projects English copy for a system preset and keeps a user preset's own name", () => {
+    const { controller } = setup("en", {
+      ...VIEW,
+      namespace: {
+        ...VIEW.namespace!,
+        user: { default: "mine" },
+        value: { default: "mine" },
+      },
+      presets: [
+        {
+          id: "standard",
+          trust: "system",
+          name: "标准模式",
+          description:
+            "功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。",
+          removable: false,
+          openable: false,
+        },
+        {
+          id: "mine",
+          trust: "user",
+          name: "My Coding Agent",
+          description: "Personal preset",
+          removable: true,
+          openable: true,
+        },
+      ],
+    });
+
+    expect(screen.getByRole("button", { name: "Set Standard Mode as default" }))
+      .toBeEnabled();
+    expect(screen.getByText(
+      "A full-featured coding agent with file editing, shell, file and web search, skills, plan, goals, subagents, and workflows.",
+    )).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open My Coding Agent" })).toBeEnabled();
+    expect(screen.getByText("Personal preset")).toBeVisible();
+    expect(screen.queryByText("标准模式")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy Standard Mode" }));
+    expect(screen.getByRole("dialog", { name: "Copy Agent Preset · Standard Mode" }))
+      .toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "View Standard Mode" }));
+    expect(screen.getByRole("dialog", { name: "Preset content · Standard Mode" }))
+      .toBeVisible();
+    expect(controller.snapshot().copy).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete My Coding Agent" }));
+    expect(screen.getByRole("option", { name: "Standard Mode" })).toBeInTheDocument();
   });
 
   it("centralizes Chinese dialog and accessibility copy", () => {

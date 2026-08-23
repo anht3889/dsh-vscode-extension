@@ -11,6 +11,7 @@ import {
   settingsText,
 } from "../../localization/index.js";
 import type { SettingsLocale } from "../../types.js";
+import { resolvePresetDisplayCopy } from "../../presetCopy.js";
 import { SettingsConfirmation } from "../../SettingsConfirmation.js";
 import { AgentPresetsController } from "./AgentPresetsController.js";
 import { useNestedDialogFocus } from "./dialogFocus.js";
@@ -21,6 +22,16 @@ interface AgentPresetsSectionProps {
   view: AgentPresetsSettingsView;
   locale: SettingsLocale;
   onConfirmationChange?(active: boolean): void;
+}
+
+function displayedPresetName(
+  locale: SettingsLocale,
+  row: { id: string; trust: "system" | "user"; name?: string } | undefined,
+  fallback: string,
+): string {
+  if (row === undefined) return fallback;
+  return resolvePresetDisplayCopy(locale, row.trust, row.id, { name: row.name }).name
+    ?? row.id;
 }
 
 export function AgentPresetsSection({
@@ -131,7 +142,13 @@ export function AgentPresetsSection({
               </h3>
               <ul className="dsh-preset-cards">
                 {rows.map((row) => {
-                  const name = row.name ?? row.id;
+                  const display = resolvePresetDisplayCopy(
+                    locale,
+                    row.trust,
+                    row.id,
+                    { name: row.name, description: row.description },
+                  );
+                  const name = display.name ?? row.id;
                   return (
                     <li className="dsh-preset-card" key={row.id}>
                       <button
@@ -163,7 +180,7 @@ export function AgentPresetsSection({
                           ) : null}
                         </span>
                         <span>
-                          {row.description ?? settingsText(locale, "presetsNoDescription")}
+                          {display.description ?? settingsText(locale, "presetsNoDescription")}
                         </span>
                         {row.broken === undefined ? null : (
                           <span role="alert">
@@ -250,7 +267,7 @@ export function AgentPresetsSection({
         >
           <h4 id={copyTitleId}>
             {settingsText(locale, "presetsCopyTitle")} ·{" "}
-            {copySource?.name ?? copySource?.id ?? snapshot.copy.fromPresetId}
+            {displayedPresetName(locale, copySource, snapshot.copy.fromPresetId)}
           </h4>
           <p>{settingsText(locale, "presetsCopyIntro")}</p>
           <label>
@@ -330,7 +347,9 @@ export function AgentPresetsSection({
                 >
                   <option value="">{settingsText(locale, "presetsFallback")}</option>
                   {snapshot.deletion.fallbackOptions.map((row) => (
-                    <option key={row.id} value={row.id}>{row.name ?? row.id}</option>
+                    <option key={row.id} value={row.id}>
+                      {displayedPresetName(locale, row, row.id)}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -390,7 +409,7 @@ export function AgentPresetsSection({
         <PresetViewer
           locale={locale}
           viewer={snapshot.viewer}
-          name={viewerRow?.name ?? viewerRow?.id ?? snapshot.viewer.presetId}
+          name={displayedPresetName(locale, viewerRow, snapshot.viewer.presetId)}
           onClose={closeViewer}
         />
       )}

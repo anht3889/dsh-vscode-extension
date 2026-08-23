@@ -30,7 +30,7 @@ function view(namespaces: SettingsNamespaceWire[]): GeneralSettingsView {
   return {
     section: "general",
     namespaces,
-    agentPresets: [{ id: "standard", label: "Standard" }],
+    agentPresets: [{ id: "standard", label: "Standard", trust: "system" }],
     permissionPresets: [
       { id: "workspace-write", label: "Workspace Write", dangerous: false },
     ],

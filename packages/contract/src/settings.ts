@@ -110,7 +110,7 @@ export interface AgentPresetSettingsItemWire {
 export interface GeneralSettingsView {
   section: "general";
   namespaces: SettingsNamespaceWire[];
-  agentPresets: { id: string; label: string }[];
+  agentPresets: { id: string; label: string; trust: "system" | "user" }[];
   permissionPresets: { id: string; label: string; dangerous: boolean }[];
 }
 
@@ -644,9 +644,13 @@ function isPluginInventoryItemWire(value: unknown): value is PluginInventoryItem
   return (FIBER_PHASES as readonly unknown[]).includes(value.fiberPhase);
 }
 
-function isAgentPresetListItemWire(value: unknown): value is { id: string; label: string } {
-  if (!isClosedRecord(value, ["id", "label"], ["id", "label"])) return false;
-  return isPresetId(value.id) && isNonEmptyString(value.label);
+function isAgentPresetListItemWire(
+  value: unknown,
+): value is { id: string; label: string; trust: "system" | "user" } {
+  if (!isClosedRecord(value, ["id", "label", "trust"], ["id", "label", "trust"])) return false;
+  return isPresetId(value.id)
+    && isNonEmptyString(value.label)
+    && (value.trust === "system" || value.trust === "user");
 }
 
 function isPermissionPresetListItemWire(
