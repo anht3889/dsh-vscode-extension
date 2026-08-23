@@ -7,11 +7,11 @@
 
 ## 1. Goal
 
-Give the VS Code sidebar chat the same operational chrome as DSH Web: startup feedback, recent-session picker, new chat, permission preset, model picker, next-request context meter, and a squircle composer. Every control that is shown is functional end-to-end except **Settings**, which is a disabled placeholder.
+Give the VS Code sidebar chat the same operational chrome as DSH Web: startup feedback, recent-session picker, new chat, permission preset, model picker, next-request context meter, and a squircle composer. Settings behavior is defined by the later [settings parity design](2026-08-23-dsh-vscode-settings-parity-design.md).
 
 ## 2. Non-goals
 
-- Settings panel or user-settings mutation.
+- Settings behavior, which is owned by the later settings parity design.
 - Global (cross-workspace) session list.
 - Replacing the NDJSON bridge with Host HTTP RPC or the JSON-RPC SDK.
 - Per-turn model RPC distinct from “next message in this session”.
@@ -121,7 +121,7 @@ Add:
 
 ### 6.1 Header (inside the webview)
 
-Native view title cannot host a spinner. Header row: title `DSH: Chat`, spinner visible while `status` is starting (from `dsh.start` until `ready`) or `thinking`. Three Codicon buttons: Recent, Settings (disabled, tooltip “Coming soon”), New chat.
+Native view title cannot host a spinner. Header row: title `DSH: Chat`, spinner visible while `status` is starting (from `dsh.start` until `ready`) or `thinking`. Three Codicon buttons: Recent, Settings, New chat. The later settings parity design owns the enabled Settings behavior.
 
 ### 6.2 Recent popover
 

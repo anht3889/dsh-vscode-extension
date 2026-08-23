@@ -15,6 +15,8 @@ test/**
 # E2E build artifacts + tooling
 dist-test/**
 e2e-build.mjs
+coverage/**
+**/.vite/**
 
 # build/tooling config
 vitest.config.ts
@@ -22,5 +24,28 @@ tsconfig.json
 tsconfig.e2e.json
 esbuild.mjs
 
-# deps (reinstalled by VS Code at runtime from `dependencies`)
+# source maps contain embedded source and are not required at runtime
+dist/**/*.map
+
+# bundled dependencies are already present in dist/extension.js and dist/webview.js
 node_modules/**
+
+# repository-only material and accidental local output
+.superpowers/**
+docs/**
+**/.DS_Store
+**/*.log
+**/*.vsix
+
+# local configuration and credential material must never enter a package
+**/.env
+**/.env.*
+**/settings.yaml
+**/settings.yml
+**/settings.json
+**/.credentials.yaml
+**/.credentials.yml
+**/.credentials.json
+**/credentials.yaml
+**/credentials.yml
+**/credentials.json

@@ -18,7 +18,27 @@ describe("isOutboundMessage", () => {
 
 describe("isInboundMessage", () => {
   it("accepts a submit message", () => {
-    expect(isInboundMessage({ kind: "submit", text: "hi" })).toBe(true);
+    expect(isInboundMessage({
+      kind: "submit",
+      requestId: "submit-1",
+      mode: "queue",
+      text: "hi",
+    })).toBe(true);
+  });
+  it("rejects submit without correlation or delivery mode", () => {
+    expect(isInboundMessage({ kind: "submit", text: "hi" })).toBe(false);
+    expect(isInboundMessage({
+      kind: "submit",
+      requestId: "",
+      mode: "queue",
+      text: "hi",
+    })).toBe(false);
+    expect(isInboundMessage({
+      kind: "submit",
+      requestId: "submit-1",
+      mode: "later",
+      text: "hi",
+    })).toBe(false);
   });
   it("rejects garbage", () => {
     expect(isInboundMessage({ kind: "nope" })).toBe(false);
@@ -217,9 +237,57 @@ describe("protocol v4 slash messages", () => {
   });
 });
 
-describe("protocol v4", () => {
-  it("uses protocol v4", () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+describe("protocol v5", () => {
+  it("uses protocol v5", () => {
+    expect(PROTOCOL_VERSION).toBe(5);
+  });
+
+  it("accepts settings inbound and outbound messages", () => {
+    expect(isInboundMessage({
+      kind: "mutateSettings",
+      requestId: "m1",
+      namespace: "permission",
+      expectedRevision: 3,
+      ops: [{ op: "set", path: ["defaultPreset"], value: "workspace-write" }],
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "settingsSection",
+      requestId: "s1",
+      view: {
+        section: "general",
+        namespaces: [],
+        agentPresets: [],
+        permissionPresets: [],
+      },
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "settingsSection",
+      requestId: "s1",
+      view: { section: "models", credentialValue: "secret" },
+    })).toBe(false);
+  });
+
+  it("accepts only closed correlated submit results", () => {
+    expect(isOutboundMessage({
+      kind: "submitResult",
+      requestId: "submit-1",
+      result: { ok: true },
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "submitResult",
+      requestId: "submit-2",
+      result: { ok: false, detail: "image admission failed" },
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "submitResult",
+      requestId: "",
+      result: { ok: true },
+    })).toBe(false);
+    expect(isOutboundMessage({
+      kind: "submitResult",
+      requestId: "submit-1",
+      result: { ok: true, detail: "extra" },
+    })).toBe(false);
   });
 
   it("accepts reference search and raster image submit records", () => {
@@ -232,6 +300,8 @@ describe("protocol v4", () => {
     })).toBe(true);
     expect(isInboundMessage({
       kind: "submit",
+      requestId: "submit-image",
+      mode: "queue",
       text: "describe this",
       images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
     })).toBe(true);
@@ -275,6 +345,12 @@ describe("protocol v4", () => {
     expect(isInboundMessage({ kind: "selectModel", provider: "p", model: "m" })).toBe(true);
     expect(isInboundMessage({ kind: "selectPermission", preset: "read-only" })).toBe(true);
     expect(isInboundMessage({ kind: "resume", sessionId: "s1" })).toBe(true);
-    expect(isInboundMessage({ kind: "submit", text: "hi", permission: "workspace-write" })).toBe(true);
+    expect(isInboundMessage({
+      kind: "submit",
+      requestId: "submit-permission",
+      mode: "queue",
+      text: "hi",
+      permission: "workspace-write",
+    })).toBe(true);
   });
 });

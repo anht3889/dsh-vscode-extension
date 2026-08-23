@@ -33,6 +33,8 @@ import { createFileReferenceSearch } from "./file-references.js";
 import { admitImages } from "./image-admission.js";
 import { createSlashCatalog } from "./slash-catalog.js";
 import { createSlashCommandExecutor } from "./slash-command.js";
+import { createSettingsCoordinator } from "./settings/coordinator.js";
+import type { SettingsCoordinator } from "./settings/types.js";
 
 const PRESET_LABELS: Record<string, string> = {
   "read-only": "Read Only",
@@ -393,19 +395,17 @@ export async function runVscode(
 
 /** Optional picker fields forwarded with a submit command. */
 export interface SubmitOptions {
+  requestId: string;
+  mode: "queue" | "steer";
   provider?: string;
   model?: string;
   permission?: string;
   images?: readonly EncodedImageAttachment[];
 }
 
-/**
- * Full session command surface the bridge dispatcher routes inbound protocol
- * messages onto. Lifecycle commands beyond submit/cancel emit `status:error`
- * placeholders until Tasks 4/5 wire them.
- */
-export interface SessionController {
-  submit(text: string, opts?: SubmitOptions): void;
+/** Full session command surface for inbound bridge protocol messages. */
+export interface SessionController extends SettingsCoordinator {
+  submit(text: string, opts: SubmitOptions): void;
   cancel(): void;
   listSessions(): void;
   newSession(): void;
@@ -441,6 +441,14 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   }
 
   const selection = await startupSelection(ctx, defaultModel);
+  let refreshModelsCatalog = (_signal: AbortSignal): void => {};
+  const settingsCoordinator = createSettingsCoordinator(
+    ctx,
+    (message) => io.send(message),
+    (signal) => refreshModelsCatalog(signal),
+  );
+  io.onDisconnect(settingsCoordinator.dispose);
+  ctx.effect(() => settingsCoordinator.dispose);
   type LiveSelectionRef = ModelSelectionRef & { current: ModelRef };
 
   const initialSelectionRef: LiveSelectionRef = {
@@ -598,6 +606,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     create: (selectionRef: LiveSelectionRef) => Promise<AgentHandle>,
     slashGeneration: number,
   ): Promise<void> => {
+    idleObservationGeneration += 1;
     abortActiveAdmission();
     fileReferenceSearch.dispose();
     slashCatalog.dispose();
@@ -646,6 +655,12 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   let tail: Promise<void> = live.handle.agent.whenIdle();
+  let idleObservationGeneration = 0;
+  let disconnected = false;
+  io.onDisconnect(() => {
+    disconnected = true;
+    idleObservationGeneration += 1;
+  });
 
   const sendError = (error: unknown, code?: string): void => {
     io.send({
@@ -675,6 +690,19 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     if (context !== undefined) {
       io.send({ kind: "context", ...context });
     }
+  };
+  let catalogRefreshGeneration = 0;
+  refreshModelsCatalog = (signal: AbortSignal): void => {
+    const generation = ++catalogRefreshGeneration;
+    void (async () => {
+      const catalog = await catalogFor(ctx, live.selectionRef.current);
+      if (signal.aborted || generation !== catalogRefreshGeneration) return;
+      live.catalog = catalog;
+      io.send({ kind: "catalog", ...catalog });
+      await emitContext();
+    })().catch((error: unknown) => {
+      if (!signal.aborted) sendError(error);
+    });
   };
 
   const applyModel = async (provider: string, model: string): Promise<void> => {
@@ -716,7 +744,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     }
   });
 
-  const submit = (text: string, opts: SubmitOptions = {}): void => {
+  const submit = (text: string, opts: SubmitOptions): void => {
     queue(async () => {
       if (
         opts.permission !== undefined &&
@@ -726,16 +754,32 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
         try {
           applyPermission(opts.permission);
         } catch (error) {
-          sendError(error);
           io.send({
             kind: "permissions",
             ...buildPermissions(ctx, live.handle.agent.session),
           });
+          io.send({
+            kind: "submitResult",
+            requestId: opts.requestId,
+            result: {
+              ok: false,
+              detail: error instanceof Error ? error.message : String(error),
+            },
+          });
+          return;
         }
       }
       if (opts.provider !== undefined || opts.model !== undefined) {
         if (opts.provider === undefined || opts.model === undefined) {
-          sendError(new Error("submit model selection requires provider and model"));
+          io.send({
+            kind: "submitResult",
+            requestId: opts.requestId,
+            result: {
+              ok: false,
+              detail: "submit model selection requires provider and model",
+            },
+          });
+          return;
         } else if (
           opts.provider !== live.selectionRef.current.provider ||
           opts.model !== live.selectionRef.current.model
@@ -743,12 +787,20 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
           try {
             await applyModel(opts.provider, opts.model);
           } catch (error) {
-            sendError(error);
             const catalog =
               live.catalog ??
               (await catalogFor(ctx, live.selectionRef.current));
             live.catalog = catalog;
             io.send({ kind: "catalog", ...catalog });
+            io.send({
+              kind: "submitResult",
+              requestId: opts.requestId,
+              result: {
+                ok: false,
+                detail: error instanceof Error ? error.message : String(error),
+              },
+            });
+            return;
           }
         }
       }
@@ -766,7 +818,14 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
             )
           : [];
       } catch (error) {
-        sendError(error, "submit-rejected");
+        io.send({
+          kind: "submitResult",
+          requestId: opts.requestId,
+          result: {
+            ok: false,
+            detail: error instanceof Error ? error.message : String(error),
+          },
+        });
         return;
       } finally {
         if (activeAdmission === admission) activeAdmission = undefined;
@@ -782,26 +841,68 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
         })),
       );
       if (content.length === 0) {
-        sendError(
-          new Error("message has no text or images"),
-          "submit-rejected",
-        );
+        io.send({
+          kind: "submitResult",
+          requestId: opts.requestId,
+          result: { ok: false, detail: "message has no text or images" },
+        });
         return;
       }
-      current.handle.agent.followup(
-        createUserMessage({
-          content,
-          source: { kind: "user" },
-        }),
-      );
-      await current.handle.agent.whenIdle();
-      await sessions.flush(current.handle.agent.session);
-      await emitContext();
-      io.send({ kind: "status", state: "idle" });
+      const message = createUserMessage({
+        content,
+        source: { kind: "user" },
+      });
+      if (opts.mode === "steer") {
+        current.handle.agent.steer(message);
+      } else {
+        current.handle.agent.followup(message);
+      }
+      const observation = ++idleObservationGeneration;
+      io.send({
+        kind: "submitResult",
+        requestId: opts.requestId,
+        result: { ok: true },
+      });
+      void (async () => {
+        await current.handle.agent.whenIdle();
+        if (
+          disconnected ||
+          live !== current ||
+          observation !== idleObservationGeneration
+        ) {
+          return;
+        }
+        await sessions.flush(current.handle.agent.session);
+        if (
+          disconnected ||
+          live !== current ||
+          observation !== idleObservationGeneration
+        ) {
+          return;
+        }
+        await emitContext();
+        if (
+          disconnected ||
+          live !== current ||
+          observation !== idleObservationGeneration
+        ) {
+          return;
+        }
+        io.send({ kind: "status", state: "idle" });
+      })().catch((error: unknown) => {
+        if (
+          !disconnected &&
+          live === current &&
+          observation === idleObservationGeneration
+        ) {
+          sendError(error);
+        }
+      });
     });
   };
 
   const cancel = (): void => {
+    idleObservationGeneration += 1;
     abortActiveAdmission();
     slashCommandExecutor.cancel();
     live.handle.agent.cancel({ kind: "user" });
@@ -915,6 +1016,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const newSession = (): void => {
+    idleObservationGeneration += 1;
     abortActiveAdmission();
     const slashGeneration = retireSlashCommandExecutor();
     queue(async () => {
@@ -944,6 +1046,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
   };
 
   const resume = (sessionId: string): void => {
+    idleObservationGeneration += 1;
     let slashGeneration: number | undefined;
     if (sessionId !== live.handle.agent.session.id) {
       abortActiveAdmission();
@@ -1037,6 +1140,15 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     listSlashItems: (requestId) => slashCatalog.list(requestId),
     executeSlashCommand: (line, images) =>
       slashCommandExecutor.execute(line, images),
+    getSection: settingsCoordinator.getSection,
+    mutate: settingsCoordinator.mutate,
+    setCredential: settingsCoordinator.setCredential,
+    unsetCredential: settingsCoordinator.unsetCredential,
+    copyPreset: settingsCoordinator.copyPreset,
+    deletePreset: settingsCoordinator.deletePreset,
+    readPreset: settingsCoordinator.readPreset,
+    resolvePath: settingsCoordinator.resolvePath,
+    dispose: settingsCoordinator.dispose,
   };
 }
 

@@ -506,6 +506,39 @@ describe("reduce", () => {
     ).toBe(attachment);
   });
 
+  it("closes a picker for settings without changing conversation composition", () => {
+    const opened = reduce(readyState, {
+      kind: "pickerOpened",
+      text: "read @src",
+      token: { start: 5, end: 9, query: "src", quoted: false },
+      requestId: "attachment-1",
+    });
+    const state: UiState = {
+      ...opened,
+      transcript: [{ role: "assistant", text: "Existing", streaming: false }],
+      chips: [{
+        id: "image-1",
+        kind: "image",
+        image: PNG,
+        label: "shot.png",
+      }],
+      commandClaim: {
+        name: "goal",
+        token: "/goal ",
+        hint: "<objective>",
+        acceptsImages: true,
+      },
+    };
+
+    const closed = reduce(state, { kind: "pickerClosedForSettings" });
+
+    expect(closed).toEqual({ ...state, picker: undefined });
+    expect(closed.draft).toBe("read @src");
+    expect(closed.transcript).toBe(state.transcript);
+    expect(closed.chips).toBe(state.chips);
+    expect(closed.commandClaim).toBe(state.commandClaim);
+  });
+
   it("opens a slash picker without a catalog", () => {
     const opened = reduce(readyState, {
       kind: "slashPickerOpened",
@@ -1067,7 +1100,7 @@ describe("reduce", () => {
     expect(reduce(populated, foreign)).toBe(populated);
   });
 
-  it("retains draft on submit rejection and clears on current-session turn start", () => {
+  it("settles only the matching submit result and clears an unchanged accepted snapshot", () => {
     const populated: UiState = {
       ...initialState,
       sessionId: "s1",
@@ -1081,38 +1114,106 @@ describe("reduce", () => {
         },
       ],
     };
-    const pending = reduce(populated, { kind: "submitStarted" });
+    const pending = reduce(populated, {
+      kind: "submitStarted",
+      requestId: "submit-1",
+      mode: "steer",
+    });
+    expect(pending.pendingPromptSubmission).toMatchObject({
+      requestId: "submit-1",
+      mode: "steer",
+      draft: "look",
+    });
     const rejected = reduce(pending, {
-      kind: "status",
-      state: "error",
-      code: "submit-rejected",
-      detail: "model has no image input",
+      kind: "submitResult",
+      requestId: "other",
+      result: { ok: true },
     });
     expect(rejected.draft).toBe("look");
     expect(rejected.chips).toHaveLength(1);
-    expect(rejected.submitPending).toBe(false);
+    expect(rejected.submitPending).toBe(true);
 
-    const accepted = reduce(pending, eventMsg("turn/start", {}));
+    const accepted = reduce(pending, {
+      kind: "submitResult",
+      requestId: "submit-1",
+      result: { ok: true },
+    });
     expect(accepted.draft).toBe("");
     expect(accepted.chips).toEqual([]);
     expect(accepted.submitPending).toBe(false);
   });
 
-  it("keeps a submit pending through an unrelated error until turn start", () => {
+  it("retains later edits on success and retains the submitted snapshot on failure", () => {
     const populated: UiState = {
       ...readyState,
       sessionId: "s1",
       draft: "look",
     };
-    const pending = reduce(populated, { kind: "submitStarted" });
-    const unrelated = reduce(pending, statusMsg("error", "unknown model"));
-    expect(unrelated.submitPending).toBe(true);
-    expect(unrelated.draft).toBe("look");
-    expect(unrelated.error).toBe("unknown model");
-
-    const accepted = reduce(unrelated, eventMsg("turn/start", {}));
+    const pending = reduce(populated, {
+      kind: "submitStarted",
+      requestId: "submit-1",
+      mode: "queue",
+    });
+    const edited = reduce(pending, { kind: "draftChanged", text: "later" });
+    const accepted = reduce(edited, {
+      kind: "submitResult",
+      requestId: "submit-1",
+      result: { ok: true },
+    });
     expect(accepted.submitPending).toBe(false);
-    expect(accepted.draft).toBe("");
+    expect(accepted.draft).toBe("later");
+
+    const retried = reduce(populated, {
+      kind: "submitStarted",
+      requestId: "submit-2",
+      mode: "queue",
+    });
+    const failed = reduce(retried, {
+      kind: "submitResult",
+      requestId: "submit-2",
+      result: { ok: false, detail: "model has no image input" },
+    });
+    expect(failed.submitPending).toBe(false);
+    expect(failed.draft).toBe("look");
+    expect(failed.error).toBe("model has no image input");
+    expect(failed.status).toBe("idle");
+    const next = reduce(
+      { ...failed, draft: "retry" },
+      { kind: "submitStarted", requestId: "submit-3", mode: "queue" },
+    );
+    expect(next.error).toBeUndefined();
+  });
+
+  it("ignores out-of-order and unrelated submit results after a newer pending starts", () => {
+    const populated: UiState = {
+      ...readyState,
+      sessionId: "s1",
+      draft: "keep this",
+    };
+    const first = reduce(populated, {
+      kind: "submitStarted",
+      requestId: "submit-old",
+      mode: "queue",
+    });
+    const newer = reduce(first, {
+      kind: "submitStarted",
+      requestId: "submit-new",
+      mode: "steer",
+    });
+    const stale = reduce(newer, {
+      kind: "submitResult",
+      requestId: "submit-old",
+      result: { ok: true },
+    });
+    const unrelated = reduce(stale, {
+      kind: "submitResult",
+      requestId: "submit-other",
+      result: { ok: false, detail: "unrelated" },
+    });
+    expect(unrelated.submitPending).toBe(true);
+    expect(unrelated.draft).toBe("keep this");
+    expect(unrelated.pendingPromptSubmission?.requestId).toBe("submit-new");
+    expect(unrelated.error).toBeUndefined();
   });
 
   it("retains later draft and chip edits when the accepted command starts", () => {
@@ -1297,7 +1398,7 @@ describe("reduce", () => {
 
     const promptPending = reduce(
       { ...readyState, sessionId: "s1", draft: "hello" },
-      { kind: "submitStarted" },
+      { kind: "submitStarted", requestId: "submit-command", mode: "queue" },
     );
     expect(reduce(promptPending, statusMsg("idle")).submitPending).toBe(true);
     expect(
@@ -1374,7 +1475,7 @@ describe("reduce", () => {
   it("unlocks a pending submit when the retained child disconnects", () => {
     const pending = reduce(
       { ...readyState, sessionId: "s1", draft: "look" },
-      { kind: "submitStarted" },
+      { kind: "submitStarted", requestId: "submit-disconnect", mode: "queue" },
     );
     const disconnected = reduce(pending, {
       kind: "hostDisconnected",

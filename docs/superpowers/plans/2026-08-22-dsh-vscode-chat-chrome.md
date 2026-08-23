@@ -18,7 +18,7 @@
 - Full Access confirm is webview-only, once per `sessionId`.
 - Model list: configured and currently usable only; include `contextWindow` when `resolveModelInfo` provides it.
 - Context meter: next-request projected tokens ÷ model `contextWindow`; hide if window unknown.
-- Settings button: present, disabled, tooltip `Coming soon`.
+- Settings button: present; the later settings parity plan owns its enabled behavior.
 - Preserve existing uncommitted extension work; do not revert it.
 - Prefer published `@deepseek-ai/*` packages in the bridge. Change `deepseek-harness` only if a required service cannot be mounted or called from published APIs.
 - TDD: failing test → implement → pass → commit. Do not commit unrelated dirty files.
@@ -1086,7 +1086,7 @@ export function Header(props: {
 }): JSX.Element
 ```
 
-Title text exactly `DSH: Chat`. Spinner if `starting || thinking`. Settings `disabled` `title="Coming soon"`.
+Title text exactly `DSH: Chat`. Spinner if `starting || thinking`. The later settings parity plan replaces this task's original Settings-button behavior.
 
 `RecentPopover.tsx`: search input, list `className="dsh-recent-list"` with CSS `max-height: calc(5 * 28px)`, `overflow-y: auto`. Click-outside: `useEffect` on `pointerdown` for `!root.contains(event.target)`. Escape closes. Empty states: `sessionsUnavailable` → `Session history unavailable`; else `No recent chats`.
 

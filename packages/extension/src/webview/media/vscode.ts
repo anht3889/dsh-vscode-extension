@@ -17,7 +17,51 @@ export type UiCommandCmd =
   | { kind: "attachImage" }
   | { kind: "confirmNewChat" }
   | { kind: "confirmFullAccess" }
+  | { kind: "confirmSettingsFullAccess"; requestId: string }
+  | { kind: "getExtensionSettings"; requestId: string }
+  | {
+      kind: "updateExtensionSettings";
+      requestId: string;
+      binaryPath: string;
+      handshakeTimeoutMs: number;
+    }
+  | { kind: "openExtensionSettings"; requestId: string }
+  | { kind: "openSettingsDocument"; requestId: string }
+  | { kind: "revealDshHome"; requestId: string }
+  | { kind: "openAgentPreset"; requestId: string; presetId: string }
+  | { kind: "restartDsh"; requestId: string }
   | { kind: "webviewReady" };
+
+export type SettingsHostAction =
+  | "read"
+  | "write"
+  | "openExtensionSettings"
+  | "openSettingsDocument"
+  | "revealDshHome"
+  | "openAgentPreset"
+  | "restart";
+
+export type SettingsHostResultMessage =
+  | {
+      kind: "settingsHostResult";
+      requestId: string;
+      action: SettingsHostAction;
+      result: {
+        ok: true;
+        settings?: { binaryPath: string; handshakeTimeoutMs: number };
+        restartRequired?: boolean;
+      };
+    }
+  | {
+      kind: "settingsHostResult";
+      requestId: string;
+      action: SettingsHostAction;
+      result: {
+        ok: false;
+        detail: string;
+        settings?: { binaryPath: string; handshakeTimeoutMs: number };
+      };
+    };
 
 /** Images selected and encoded by the extension host. */
 export interface ImagesPickedMessage {

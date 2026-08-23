@@ -116,6 +116,19 @@ describe("ProcessManager", () => {
     expect(pm.hasRunning(folder)).toBe(false);
   }, 10000);
 
+  it("stop() returns immediately when the child has already exited", async () => {
+    const pm = makeManager();
+    const folder = tmpFolder();
+    await pm.start(folder);
+    const child = pm.getChild(folder)!;
+    child.kill("SIGKILL");
+    await waitFor(() => child.exitCode !== null || child.signalCode !== null);
+
+    await pm.stop(folder);
+    expect(pm.hasRunning(folder)).toBe(false);
+    expect(pm.getChild(folder)).toBeUndefined();
+  }, 10000);
+
   it("stop() terminates the child; a second stop is a no-op", async () => {
     const pm = makeManager();
     const folder = tmpFolder();

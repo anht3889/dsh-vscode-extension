@@ -27,7 +27,82 @@ search plus a native Attach image action. File and folder chips are sent as
 `@path` references; DSH reads their contents only when needed.
 Image chips depend on the selected model declaring image input and on DSH
 attachment limits. Full Access requires confirmation once per chat. Settings is
-reserved for a later release.
+available from the header gear.
+
+## Settings
+
+The header gear opens a focus-managed settings dialog. Tab reaches the gear
+button; Enter or Space opens the dialog. Opening it closes Recent and any
+composer picker while preserving the transcript, prompt draft, and attachments.
+Conversation streaming continues while the dialog is open. Escape, the backdrop,
+the close button, and the gear close it; closing returns focus to the gear
+button. Staged changes prompt before they are discarded. The five sections are:
+
+- **General** — future-session agent-preset and permission defaults, language,
+  appearance, and Busy Enter behavior. Current-session model and permission
+  controls remain in the composer. Appearance configures DSH Web; this extension
+  always follows the VS Code or Cursor theme.
+- **Models** — configured providers, supported provider profiles, model
+  metadata, and write-only provider credentials. Provider settings are saved
+  before credentials, so credential failure can leave a provider configured
+  without its key. Deleting a provider can remove an attributable writable
+  credential first; that secret cannot be restored if the later settings write
+  fails.
+- **Plugins** — specialized cards for mounted Shell, Agent Loop, and Web Search
+  settings plus a read-only inventory. The inventory exposes only module name,
+  loader entry id, enabled state, and fiber phase; the DSH inventory service
+  supplies no package descriptions and no generic plugin editor is provided.
+- **Agent Presets** — inspect built-in compositions, set the future-session
+  default, copy presets, and open or delete user presets. Deleting the current
+  default requires selecting a healthy replacement first. The DSH Web preset
+  creator is not included because it depends on Web's conversation/workspace
+  flow rather than the shared preset service.
+- **Extension** — DSH binary path, handshake timeout, VS Code Settings, trusted
+  actions for the DSH settings document/home and user-preset folders, and
+  explicit Restart DSH.
+
+DSH-backed settings use the active `$DSH_HOME` settings and credentials stores.
+They are global to every workspace and session using that DSH home, not scoped
+to the current VS Code workspace or chat. General's agent-preset and permission
+rows set defaults for future sessions; they do not replace the current
+session's composer selections. Language includes a System default option that
+unsets the stored locale preference. Language and Busy Enter update the extension
+after a successful live write. While the agent is idle, Enter always queues.
+While it is busy, Enter follows the configured queue/steer preference,
+Cmd/Ctrl+Enter uses the opposite behavior, and Shift+Enter inserts a newline.
+
+Credential values are write-only: the bridge sends the webview only configured,
+source, and writable metadata. Secret inputs are cleared after submission and
+are excluded from settings state, retained webview state, logs, diagnostics,
+and snapshots. The extension never reads or writes settings YAML itself.
+
+Each DSH namespace declares whether changes apply live or require restart.
+Restart-required saves show a persistent banner but do not restart the child
+automatically. Restart is unavailable while DSH is starting, thinking, awaiting
+approval, or already restarting, but remains available after a disconnect. A
+successful restart uses the same workspace/profile and resumes the current
+session when one exists.
+
+Every DSH write carries the last observed namespace revision. If another DSH
+client or external file edit wins, the section refreshes authoritative data,
+preserves the local non-secret draft, and offers revision-gated Retry or
+Discard. Clean active forms synchronize automatically; dirty forms are marked
+stale. A disconnect preserves non-secret drafts and reconciles them after
+reconnect. Process loss can make an interrupted mutation's commit status
+unknowable, so refreshed DSH state is authoritative.
+
+The Extension section is owned by VS Code configuration rather than
+`$DSH_HOME`. Each field preserves the configuration target currently supplying
+its effective value (workspace folder, workspace, or global); a contribution
+default is written globally. Multi-field updates use best-effort compensation
+but are not an atomic VS Code configuration transaction. Trusted filesystem
+actions accept only bridge-resolved DSH targets, never a webview-provided path.
+
+The extension and bridge ship protocol version 5 together. Protocol v4 submit
+or settings records are rejected; there is no cross-version compatibility shim.
+Multi-stage model, plugin-credential, preset-default/delete, and Extension
+configuration operations are intentionally non-atomic. The UI reports partial
+success and retries only the incomplete stage rather than claiming rollback.
 
 ## Slash menu
 
@@ -86,9 +161,13 @@ To run the extension in a VS Code Extension Development Host:
 ## Configuration
 
 - `dsh.binaryPath` — path to the `dsh` binary. Empty (default) means the
-  extension resolves `dsh` from `PATH`.
+  extension probes nvm and common Homebrew locations before using the extension
+  host `PATH`.
+- `dsh.handshakeTimeoutMs` — whole milliseconds to wait for the DSH bridge
+  handshake, from 1,000 through 300,000 (default 30,000).
 - `DSH_HOME` — optional harness-home override. Recent chats use the base
-  profile's `<DSH_HOME>/sessions` JSONL directory.
+  profile's `<DSH_HOME>/sessions` JSONL directory, and DSH-backed settings use
+  that home's global settings and credentials stores.
 
 ## Commands
 
@@ -118,8 +197,12 @@ backend and is outside the smoke's deterministic floor).
 
 ## Packaging
 
+From the repository root:
+
 ```bash
-pnpm --dir packages/extension exec vsce package   # or: npx @vscode/vsce package
+pnpm --filter dsh run package
 ```
 
-Produces `dsh-<version>.vsix` in the package directory.
+This runs `vsce package --no-dependencies` (see the `package` script in
+`packages/extension/package.json`). Produces
+`packages/extension/dsh-<version>.vsix`.

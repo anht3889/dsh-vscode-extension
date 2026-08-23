@@ -84,6 +84,13 @@ export interface PendingCommandSubmission {
   chips: DraftChip[];
 }
 
+export interface PendingPromptSubmission {
+  requestId: string;
+  mode: "queue" | "steer";
+  draft: string;
+  chips: DraftChip[];
+}
+
 /**
  * One rendered turn of the conversation.
  *
@@ -120,6 +127,7 @@ export interface UiState {
   picker: PickerState | undefined;
   commandClaim: CommandClaim | undefined;
   submitPending: boolean;
+  pendingPromptSubmission: PendingPromptSubmission | undefined;
   pendingCommandSubmission: PendingCommandSubmission | undefined;
 }
 
@@ -142,6 +150,7 @@ export const initialState: UiState = {
   picker: undefined,
   commandClaim: undefined,
   submitPending: false,
+  pendingPromptSubmission: undefined,
   pendingCommandSubmission: undefined,
 };
 
@@ -186,6 +195,10 @@ interface PickerDismissedMessage {
   kind: "pickerDismissed";
 }
 
+interface PickerClosedForSettingsMessage {
+  kind: "pickerClosedForSettings";
+}
+
 interface ReferencePickedMessage {
   kind: "referencePicked";
   id: string;
@@ -199,6 +212,8 @@ interface ChipRemovedMessage {
 
 interface SubmitStartedMessage {
   kind: "submitStarted";
+  requestId: string;
+  mode: "queue" | "steer";
 }
 
 interface CommandSubmitStartedMessage {
@@ -268,6 +283,7 @@ export type UiMessage =
   | PickerOpenedMessage
   | PickerQueryChangedMessage
   | PickerDismissedMessage
+  | PickerClosedForSettingsMessage
   | ReferencePickedMessage
   | ChipRemovedMessage
   | SubmitStartedMessage
@@ -691,6 +707,9 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       };
     }
 
+    case "pickerClosedForSettings":
+      return state.picker === undefined ? state : { ...state, picker: undefined };
+
     case "referencePicked": {
       if (state.picker?.kind === "slash" || state.picker === undefined) {
         return state;
@@ -869,6 +888,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         picker: undefined,
         commandClaim: undefined,
         submitPending: false,
+        pendingPromptSubmission: undefined,
         pendingCommandSubmission: undefined,
       };
 
@@ -894,9 +914,44 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       return {
         ...state,
         submitPending: true,
+        error: undefined,
+        pendingPromptSubmission: {
+          requestId: msg.requestId,
+          mode: msg.mode,
+          draft: state.draft,
+          chips: state.chips.map(snapshotChip),
+        },
         pendingCommandSubmission: undefined,
         picker: undefined,
       };
+
+    case "submitResult": {
+      const pending = state.pendingPromptSubmission;
+      if (pending === undefined || pending.requestId !== msg.requestId) return state;
+      const unchanged =
+        state.draft === pending.draft && sameChips(state.chips, pending.chips);
+      if (!msg.result.ok) {
+        return {
+          ...state,
+          submitPending: false,
+          pendingPromptSubmission: undefined,
+          error: msg.result.detail,
+        };
+      }
+      return {
+        ...state,
+        submitPending: false,
+        pendingPromptSubmission: undefined,
+        ...(unchanged
+          ? {
+              draft: "",
+              chips: [],
+              picker: undefined,
+              commandClaim: undefined,
+            }
+          : {}),
+      };
+    }
 
     case "commandSubmitStarted":
       return {
@@ -924,6 +979,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         picker: undefined,
         commandClaim: undefined,
         submitPending: false,
+        pendingPromptSubmission: undefined,
         pendingCommandSubmission: undefined,
       };
 
@@ -985,6 +1041,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
               draft: "",
               chips: [],
               submitPending: false,
+              pendingPromptSubmission: undefined,
               pendingCommandSubmission: undefined,
             }
           : {}),
@@ -1003,6 +1060,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         picker: undefined,
         commandClaim: undefined,
         submitPending: false,
+        pendingPromptSubmission: undefined,
         pendingCommandSubmission: undefined,
       };
 
@@ -1010,18 +1068,16 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       // Surfaced (not silently swallowed): a crashed child or failed startup is
       // relayed as status:error and rendered by App as a visible error banner.
       //
-      // Ordinary prompt submits stay locked until `submit-rejected` or
-      // `turn/start`. Command pending state is different: cancel or failure can
-      // arrive as generic idle/error before `command/run`, so those settle only
-      // the command snapshot.
+      // Ordinary prompts settle only through correlated submitResult messages.
+      // Command pending state is different: cancel or failure can arrive as
+      // generic idle/error before `command/run`, so those settle its snapshot.
       if (msg.state === "error") {
         return {
           ...state,
           error: msg.detail ?? "DSH reported an error",
           starting: false,
           status: "error",
-          ...(msg.code === "submit-rejected" ||
-          msg.code === "command-rejected"
+          ...(msg.code === "command-rejected"
             ? {
                 submitPending: false,
                 pendingCommandSubmission: undefined,
@@ -1072,15 +1128,6 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
           diffs: [],
           status: "thinking",
           transcript: closeStreaming(state.transcript),
-          ...(state.submitPending &&
-          state.pendingCommandSubmission === undefined
-            ? {
-                draft: "",
-                chips: [],
-                picker: undefined,
-                submitPending: false,
-              }
-            : {}),
         };
       }
       if (type === "turn/end") {

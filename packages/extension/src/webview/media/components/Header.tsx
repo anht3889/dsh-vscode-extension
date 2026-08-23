@@ -3,8 +3,11 @@ import React, { useEffect, useRef } from "react";
 interface HeaderProps {
   busy: boolean;
   recentOpen: boolean;
+  settingsOpen: boolean;
+  settingsButtonRef: React.RefObject<HTMLButtonElement>;
   onRecent(): void;
   onCloseRecent(): void;
+  onSettings(): void;
   onNewChat(): void;
   children?: React.ReactNode;
 }
@@ -34,8 +37,11 @@ function Icon({
 export function Header({
   busy,
   recentOpen,
+  settingsOpen,
+  settingsButtonRef,
   onRecent,
   onCloseRecent,
+  onSettings,
   onNewChat,
   children,
 }: HeaderProps): JSX.Element {
@@ -59,7 +65,13 @@ export function Header({
     <header className="dsh-header">
       <div className="dsh-title">
         <span>DSH: Chat</span>
-        {busy ? <span className="dsh-spinner" role="status" aria-label="DSH is working" /> : null}
+        {busy ? (
+          <span
+            className="dsh-spinner"
+            role="status"
+            aria-label="DSH is working"
+          />
+        ) : null}
       </div>
       <div className="dsh-header-actions">
         <div className="dsh-recent-owner" ref={recentRoot}>
@@ -80,11 +92,14 @@ export function Header({
           {children}
         </div>
         <button
+          ref={settingsButtonRef}
           className="dsh-icon-button"
           type="button"
-          title="Coming soon"
-          aria-label="Settings (coming soon)"
-          disabled
+          title="Settings"
+          aria-label="Settings"
+          aria-haspopup="dialog"
+          aria-expanded={settingsOpen}
+          onClick={onSettings}
         >
           <Icon>
             <circle cx="8" cy="8" r="2.2" />

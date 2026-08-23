@@ -70,6 +70,8 @@ function renderComposer(
       picker={undefined}
       commandClaim={undefined}
       submitPending={false}
+      busyEnter="queue"
+      locale="en"
       focusPickerSearch={false}
       onDraftChange={vi.fn()}
       onCaretChange={vi.fn()}
@@ -94,6 +96,14 @@ function renderComposer(
 afterEach(cleanup);
 
 describe("Composer send gating", () => {
+  it("gives the message textarea a localized accessible name", () => {
+    renderComposer();
+    expect(screen.getByRole("textbox", { name: "Message" })).toBeVisible();
+    cleanup();
+    renderComposer({ locale: "zh" });
+    expect(screen.getByRole("textbox", { name: "消息" })).toBeVisible();
+  });
+
   it("enables Send for an image-only draft", () => {
     renderComposer({ chips: [imageChip] });
     expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
@@ -118,6 +128,55 @@ describe("Composer send gating", () => {
     fireEvent.click(stop);
     expect(onCancel).toHaveBeenCalled();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("maps idle and busy keyboard gestures to queue and steer", () => {
+    const onSubmit = vi.fn();
+    const { rerender } = renderComposer({ draft: "hello", onSubmit });
+    const input = screen.getByPlaceholderText("Message DSH…");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).toHaveBeenLastCalledWith("queue");
+
+    rerender(
+      <Composer
+        ready
+        models={undefined}
+        permissions={undefined}
+        context={undefined}
+        status="thinking"
+        draft="hello"
+        chips={[]}
+        picker={undefined}
+        commandClaim={undefined}
+        submitPending={false}
+        busyEnter="steer"
+        locale="en"
+        focusPickerSearch={false}
+        onDraftChange={vi.fn()}
+        onCaretChange={vi.fn()}
+        onOpenPicker={vi.fn()}
+        onPickerQuery={vi.fn()}
+        onPickReference={vi.fn()}
+        onMoveSlashHighlight={vi.fn()}
+        onPickSlashItem={vi.fn()}
+        onDismissPicker={vi.fn()}
+        onRemoveChip={vi.fn()}
+        onAttachImage={vi.fn()}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+        onSelectModel={vi.fn()}
+        onSelectPermission={vi.fn()}
+        onRequestFullAccess={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).toHaveBeenLastCalledWith("steer");
+    fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+    expect(onSubmit).toHaveBeenLastCalledWith("queue");
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenLastCalledWith("queue");
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(onSubmit).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -211,6 +270,8 @@ describe("Composer slash keyboard arbitration", () => {
           picker={slashPicker}
           commandClaim={undefined}
           submitPending={false}
+          busyEnter="queue"
+          locale="en"
           focusPickerSearch={false}
           onDraftChange={vi.fn()}
           onCaretChange={vi.fn()}

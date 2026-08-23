@@ -39,7 +39,7 @@ export class ProcessManager {
    *  writing into a dead pipe is converted to a visible rejection. */
   async start(
     folder: string
-  ): Promise<{ client: ProtocolClient; child: ChildProcess; stop(): void }> {
+  ): Promise<{ client: ProtocolClient; child: ChildProcess; stop(): Promise<void> }> {
     const binary = this.options.resolveBinary();
     const args = this.options.argsFor();
 
@@ -145,12 +145,7 @@ export class ProcessManager {
     return {
       client,
       child,
-      stop: () => {
-        this.running.delete(folder);
-        this.options.onExit?.(folder, null, null);
-        try { client.send({ kind: "exit" }); } catch { /* ignore */ }
-        child.kill("SIGTERM");
-      },
+      stop: () => this.stopOwned(folder, { child, client }),
     };
   }
 
@@ -164,11 +159,17 @@ export class ProcessManager {
 
   async stop(folder: string): Promise<void> {
     const running = this.running.get(folder);
-    if (!running) {
-      return;
-    }
-    this.running.delete(folder);
+    if (!running) return;
+    await this.stopOwned(folder, running);
+  }
 
+  private async stopOwned(
+    folder: string,
+    running: RunningProcess,
+  ): Promise<void> {
+    if (this.running.get(folder) === running) {
+      this.running.delete(folder);
+    }
     const { child, client } = running;
 
     // If the process already exited, there is nothing to await.

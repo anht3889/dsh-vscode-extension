@@ -48,6 +48,8 @@ export function dispatchCommand(
   switch (msg.kind) {
     case "submit":
       hooks.runner.submit(msg.text, {
+        requestId: msg.requestId,
+        mode: msg.mode,
         ...(msg.provider !== undefined ? { provider: msg.provider } : {}),
         ...(msg.model !== undefined ? { model: msg.model } : {}),
         ...(msg.permission !== undefined ? { permission: msg.permission } : {}),
@@ -83,6 +85,30 @@ export function dispatchCommand(
       return;
     case "executeSlashCommand":
       hooks.runner.executeSlashCommand(msg.line, msg.images);
+      return;
+    case "getSettingsSection":
+      hooks.runner.getSection(msg.requestId, msg.section);
+      return;
+    case "mutateSettings":
+      hooks.runner.mutate(msg);
+      return;
+    case "setCredential":
+      hooks.runner.setCredential(msg);
+      return;
+    case "unsetCredential":
+      hooks.runner.unsetCredential(msg);
+      return;
+    case "copyAgentPreset":
+      hooks.runner.copyPreset(msg);
+      return;
+    case "deleteAgentPreset":
+      hooks.runner.deletePreset(msg);
+      return;
+    case "readAgentPreset":
+      hooks.runner.readPreset(msg);
+      return;
+    case "resolveSettingsPath":
+      hooks.runner.resolvePath(msg);
       return;
     case "exit":
       return;

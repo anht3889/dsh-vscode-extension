@@ -26,7 +26,7 @@ describe("createStdio", () => {
     const io = createStdio({ stdin } as any);
     const got: InboundMessage[] = [];
     io.onCommand((m) => got.push(m));
-    stdin.write('{"kind":"submit","text"');
+    stdin.write('{"kind":"submit","requestId":"submit-1","mode":"queue","text"');
     stdin.write(':"hi"}\n');
     await new Promise((r) => setImmediate(r));
     expect(got).toHaveLength(1);
