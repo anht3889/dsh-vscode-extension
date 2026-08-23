@@ -203,7 +203,7 @@ describe("session controller", () => {
     const messages: OutboundMessage[] = [];
     const runner = await createRunner(await boot(), capture(messages));
 
-    runner.submit("workspace list title");
+    runner.submit("workspace list title", { requestId: "test-submit-11", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -237,7 +237,10 @@ describe("session controller", () => {
         await boot(),
         capture(foreignMessages),
       );
-      foreign.submit("foreign chat");
+      foreign.submit("foreign chat", {
+        requestId: "foreign-submit",
+        mode: "queue",
+      });
       await waitFor(
         () =>
           foreignMessages.some(
@@ -251,7 +254,7 @@ describe("session controller", () => {
 
     const messages: OutboundMessage[] = [];
     const runner = await createRunner(await boot(), capture(messages));
-    runner.submit("first local chat");
+    runner.submit("first local chat", { requestId: "test-submit-12", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -263,7 +266,7 @@ describe("session controller", () => {
     await waitFor(
       () => messages.filter((message) => message.kind === "session").length >= 2,
     );
-    runner.submit("second local chat");
+    runner.submit("second local chat", { requestId: "test-submit-13", mode: "queue" });
     await waitFor(
       () =>
         messages.filter(
@@ -499,6 +502,8 @@ describe("session controller", () => {
     const runner = await createRunner(ctx, capture(messages));
 
     runner.submit("block replacement", {
+      requestId: "test-submit-1",
+      mode: "queue",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
     await deferred.started;
@@ -552,7 +557,7 @@ describe("session controller", () => {
     const runner = await createRunner(await boot(), capture(messages));
     const first = messages.find((message) => message.kind === "ready");
     if (first?.kind !== "ready") throw new Error("runner did not become ready");
-    runner.submit("persist queued resume target");
+    runner.submit("persist queued resume target", { requestId: "test-submit-14", mode: "queue" });
     await waitFor(() =>
       messages.some(
         (message) => message.kind === "status" && message.state === "idle",
@@ -758,7 +763,7 @@ describe("session controller", () => {
     }
     expect(replacementReady.sessionId).not.toBe(initialReady.sessionId);
 
-    runner.submit("replacement remains usable");
+    runner.submit("replacement remains usable", { requestId: "test-submit-15", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -777,7 +782,7 @@ describe("session controller", () => {
     const ready = messages.find((message) => message.kind === "ready");
     if (ready?.kind !== "ready") throw new Error("runner did not become ready");
 
-    runner.submit("remember this");
+    runner.submit("remember this", { requestId: "test-submit-16", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -812,7 +817,7 @@ describe("session controller", () => {
     const runner = await createRunner(await boot(), capture(messages));
     const ready = messages.find((message) => message.kind === "ready");
     if (ready?.kind !== "ready") throw new Error("runner did not become ready");
-    runner.submit("current history");
+    runner.submit("current history", { requestId: "test-submit-17", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -863,7 +868,7 @@ describe("session controller", () => {
         (message) => message.kind === "status" && message.state === "error",
       ),
     );
-    runner.submit("still live");
+    runner.submit("still live", { requestId: "test-submit-18", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -917,7 +922,7 @@ describe("session controller", () => {
       model: "mock-model",
     });
 
-    runner.submit("still uses the configured model");
+    runner.submit("still uses the configured model", { requestId: "test-submit-19", mode: "queue" });
     await waitFor(
       () =>
         messages.some(
@@ -950,11 +955,13 @@ describe("session controller", () => {
     );
   });
 
-  it("keeps the user turn when submit picker preflight fails", async () => {
+  it("rejects the correlated submit when picker preflight fails", async () => {
     const messages: OutboundMessage[] = [];
     const runner = await createRunner(await boot(), capture(messages));
 
     runner.submit("do not drop this", {
+      requestId: "test-submit-2",
+      mode: "queue",
       provider: "missing-provider",
       model: "missing-model",
     });
@@ -963,13 +970,18 @@ describe("session controller", () => {
       () =>
         messages.some(
           (message) =>
-            message.kind === "event" && message.event.type === "turn/end",
+            message.kind === "submitResult" &&
+            message.requestId === "test-submit-2" &&
+            !message.result.ok,
         ),
       60_000,
     );
     expect(
       messages.some(
-        (message) => message.kind === "status" && message.state === "error",
+        (message) =>
+          message.kind === "submitResult" &&
+          message.requestId === "test-submit-2" &&
+          !message.result.ok,
       ),
     ).toBe(true);
   }, 120_000);
@@ -983,6 +995,8 @@ describe("session controller", () => {
     if (session === undefined) throw new Error("live session was not mounted");
 
     runner.submit("look", {
+      requestId: "test-submit-3",
+      mode: "queue",
       images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
     });
 
@@ -1001,6 +1015,8 @@ describe("session controller", () => {
     if (session === undefined) throw new Error("live session was not mounted");
 
     runner.submit(" \n ", {
+      requestId: "test-submit-4",
+      mode: "queue",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
 
@@ -1019,18 +1035,24 @@ describe("session controller", () => {
     const agent = ctx.get("agents")?.roots()[0];
     if (agent === undefined) throw new Error("live agent was not mounted");
     const followup = vi.spyOn(agent, "followup");
+    const steer = vi.spyOn(agent, "steer");
 
     runner.submit("keep me", {
+      requestId: "test-submit-5",
+      mode: "steer",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
 
     await waitFor(() =>
       messages.some(
         (message) =>
-          message.kind === "status" && message.code === "submit-rejected",
+          message.kind === "submitResult" &&
+          message.requestId === "test-submit-5" &&
+          !message.result.ok,
       ),
     );
     expect(followup).not.toHaveBeenCalled();
+    expect(steer).not.toHaveBeenCalled();
   });
 
   it("cancel aborts deferred admission without starting a turn", async () => {
@@ -1041,8 +1063,11 @@ describe("session controller", () => {
     const agent = ctx.get("agents")?.roots()[0];
     if (agent === undefined) throw new Error("live agent was not mounted");
     const followup = vi.spyOn(agent, "followup");
+    const steer = vi.spyOn(agent, "steer");
 
     runner.submit("cancel this", {
+      requestId: "test-submit-6",
+      mode: "steer",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
     await deferred.started;
@@ -1052,10 +1077,13 @@ describe("session controller", () => {
     await waitFor(() =>
       messages.some(
         (message) =>
-          message.kind === "status" && message.code === "submit-rejected",
+          message.kind === "submitResult" &&
+          message.requestId === "test-submit-6" &&
+          !message.result.ok,
       ),
     );
     expect(followup).not.toHaveBeenCalled();
+    expect(steer).not.toHaveBeenCalled();
     expect(
       agent.session.events.some((event) => event.type === "turn/start"),
     ).toBe(false);
@@ -1071,6 +1099,8 @@ describe("session controller", () => {
     const followup = vi.spyOn(agent, "followup");
 
     runner.submit("replace this session", {
+      requestId: "test-submit-7",
+      mode: "queue",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
     await deferred.started;
@@ -1083,7 +1113,9 @@ describe("session controller", () => {
     expect(
       messages.some(
         (message) =>
-          message.kind === "status" && message.code === "submit-rejected",
+          message.kind === "submitResult" &&
+          message.requestId === "test-submit-7" &&
+          !message.result.ok,
       ),
     ).toBe(true);
     expect(followup).not.toHaveBeenCalled();
@@ -1101,7 +1133,7 @@ describe("session controller", () => {
     if (firstReady?.kind !== "ready") {
       throw new Error("runner did not become ready");
     }
-    runner.submit("persist resume target");
+    runner.submit("persist resume target", { requestId: "test-submit-20", mode: "queue" });
     await waitFor(() =>
       messages.some(
         (message) => message.kind === "status" && message.state === "idle",
@@ -1116,6 +1148,8 @@ describe("session controller", () => {
     const followup = vi.spyOn(agent, "followup");
 
     runner.submit("resume away from this", {
+      requestId: "test-submit-8",
+      mode: "queue",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
     await deferred.started;
@@ -1128,7 +1162,9 @@ describe("session controller", () => {
     expect(
       messages.some(
         (message) =>
-          message.kind === "status" && message.code === "submit-rejected",
+          message.kind === "submitResult" &&
+          message.requestId === "test-submit-8" &&
+          !message.result.ok,
       ),
     ).toBe(true);
     expect(followup).not.toHaveBeenCalled();
@@ -1151,6 +1187,8 @@ describe("session controller", () => {
     const followup = vi.spyOn(agent, "followup");
 
     runner.submit("disconnect this", {
+      requestId: "test-submit-9",
+      mode: "queue",
       images: [{ mediaType: "image/png", data: "AQ==" }],
     });
     await deferred.started;
@@ -1160,7 +1198,9 @@ describe("session controller", () => {
     await waitFor(() =>
       messages.some(
         (message) =>
-          message.kind === "status" && message.code === "submit-rejected",
+          message.kind === "submitResult" &&
+          message.requestId === "test-submit-9" &&
+          !message.result.ok,
       ),
     );
     expect(followup).not.toHaveBeenCalled();
@@ -1174,6 +1214,8 @@ describe("session controller", () => {
     const runner = await createRunner(await boot(), capture(messages));
 
     runner.submit("measure this turn", {
+      requestId: "test-submit-10",
+      mode: "queue",
       provider: "deepseek-official",
       model: "mock-model",
     });
@@ -1204,7 +1246,7 @@ describe("session controller", () => {
       if (foreignReady?.kind !== "ready") {
         throw new Error("runner did not become ready");
       }
-      runner.submit("foreign workspace history");
+      runner.submit("foreign workspace history", { requestId: "test-submit-21", mode: "queue" });
       await waitFor(
         () =>
           messages.some(
@@ -1234,7 +1276,7 @@ describe("session controller", () => {
             message.detail?.includes("cwd mismatch") === true,
         ),
       );
-      runner.submit("current workspace remains live");
+      runner.submit("current workspace remains live", { requestId: "test-submit-22", mode: "queue" });
       await waitFor(
         () =>
           messages.some(

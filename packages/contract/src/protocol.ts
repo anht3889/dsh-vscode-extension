@@ -1,6 +1,16 @@
 import type { SessionEventWire } from "./events.js";
+import type {
+  SettingsInboundCommand,
+  SettingsOutboundMessage,
+} from "./settings.js";
+import {
+  isSettingsInboundCommand,
+  isSettingsOutboundMessage,
+  SETTINGS_INBOUND_KINDS,
+  SETTINGS_OUTBOUND_KINDS,
+} from "./settings.js";
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export type ImageMediaType =
   | "image/png" | "image/jpeg" | "image/webp" | "image/gif";
@@ -107,15 +117,22 @@ export interface SlashItemsMessage {
   items: SlashMenuItem[];
   availability: SlashAvailability;
 }
+export interface SubmitResultMessage {
+  kind: "submitResult";
+  requestId: string;
+  result: { ok: true } | { ok: false; detail: string };
+}
 
 export type OutboundMessage =
   | HelloMessage | SessionMessage | ReadyMessage | SessionsMessage
   | CatalogMessage | PermissionsMessage | ContextMessage | HistoryMessage
   | EventMessage | AskMessage | StatusMessage | FileReferencesMessage
-  | SlashItemsMessage;
+  | SlashItemsMessage | SubmitResultMessage | SettingsOutboundMessage;
 
 export interface SubmitCommand {
   kind: "submit";
+  requestId: string;
+  mode: "queue" | "steer";
   text: string;
   provider?: string;
   model?: string;
@@ -147,7 +164,8 @@ export interface ExecuteSlashCommand {
 export type InboundMessage =
   | SubmitCommand | AnswerCommand | CancelCommand | ResumeCommand | ExitCommand
   | ListSessionsCommand | NewSessionCommand | SelectModelCommand | SelectPermissionCommand
-  | ListFileReferencesCommand | ListSlashItemsCommand | ExecuteSlashCommand;
+  | ListFileReferencesCommand | ListSlashItemsCommand | ExecuteSlashCommand
+  | SettingsInboundCommand;
 
 // ---- question/answer wire types (mirror dsh-user-questions types, dependency-free) ----
 export interface AskQuestionWire { id: string; question: string; detail?: string; header?: string; options?: { label: string; description?: string }[]; multiSelect?: boolean }
@@ -160,6 +178,13 @@ const IMAGE_MEDIA_TYPES: readonly ImageMediaType[] = [
 function kindOf(m: unknown): string | undefined {
   if (typeof m !== "object" || m === null) return undefined;
   return (m as { kind?: unknown }).kind as string | undefined;
+}
+
+function hasOnlyOwnKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
 }
 
 function isImageMediaType(v: unknown): v is ImageMediaType {
@@ -210,6 +235,9 @@ function isSlashAvailability(v: unknown): v is SlashAvailability {
 
 function validateInboundPayload(m: unknown, k: string): boolean {
   if (typeof m !== "object" || m === null) return false;
+  if ((SETTINGS_INBOUND_KINDS as readonly string[]).includes(k)) {
+    return isSettingsInboundCommand(m);
+  }
   const o = m as Record<string, unknown>;
   switch (k) {
     case "listFileReferences":
@@ -224,6 +252,11 @@ function validateInboundPayload(m: unknown, k: string): boolean {
       }
       return true;
     case "submit":
+      if (!hasOnlyOwnKeys(o, [
+        "kind", "requestId", "mode", "text", "provider", "model", "permission", "images",
+      ])) return false;
+      if (typeof o.requestId !== "string" || o.requestId.length === 0) return false;
+      if (o.mode !== "queue" && o.mode !== "steer") return false;
       if (typeof o.text !== "string") return false;
       if (o.images !== undefined) {
         if (!Array.isArray(o.images)) return false;
@@ -237,8 +270,24 @@ function validateInboundPayload(m: unknown, k: string): boolean {
 
 function validateOutboundPayload(m: unknown, k: string): boolean {
   if (typeof m !== "object" || m === null) return false;
+  if ((SETTINGS_OUTBOUND_KINDS as readonly string[]).includes(k)) {
+    return isSettingsOutboundMessage(m);
+  }
   const o = m as Record<string, unknown>;
   switch (k) {
+    case "submitResult": {
+      if (!hasOnlyOwnKeys(o, ["kind", "requestId", "result"])) return false;
+      if (typeof o.requestId !== "string" || o.requestId.length === 0) return false;
+      if (typeof o.result !== "object" || o.result === null || Array.isArray(o.result)) {
+        return false;
+      }
+      const result = o.result as Record<string, unknown>;
+      if (result.ok === true) return hasOnlyOwnKeys(result, ["ok"]);
+      return result.ok === false
+        && hasOnlyOwnKeys(result, ["ok", "detail"])
+        && typeof result.detail === "string"
+        && result.detail.length > 0;
+    }
     case "fileReferences":
       if (typeof o.requestId !== "string") return false;
       if (!Array.isArray(o.items)) return false;
@@ -255,15 +304,18 @@ function validateOutboundPayload(m: unknown, k: string): boolean {
   }
 }
 
-const OUTBOUND_KINDS = [
+const CORE_OUTBOUND_KINDS = [
   "hello", "session", "ready", "sessions", "catalog", "permissions",
   "context", "history", "event", "ask", "status", "fileReferences", "slashItems",
+  "submitResult",
 ] as const;
-const INBOUND_KINDS = [
+const OUTBOUND_KINDS = [...CORE_OUTBOUND_KINDS, ...SETTINGS_OUTBOUND_KINDS] as const;
+const CORE_INBOUND_KINDS = [
   "submit", "answer", "cancel", "resume", "exit",
   "listSessions", "newSession", "selectModel", "selectPermission",
   "listFileReferences", "listSlashItems", "executeSlashCommand",
 ] as const;
+const INBOUND_KINDS = [...CORE_INBOUND_KINDS, ...SETTINGS_INBOUND_KINDS] as const;
 
 export function isOutboundMessage(m: unknown): m is OutboundMessage {
   const k = kindOf(m);

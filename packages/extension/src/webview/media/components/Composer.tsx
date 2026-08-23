@@ -14,6 +14,8 @@ import {
   type DraftChip,
   type PickerState,
 } from "../store.js";
+import { settingsText } from "../settings/localization/index.js";
+import type { SettingsLocale } from "../settings/types.js";
 import { AttachmentPicker } from "./AttachmentPicker.js";
 import { ChipRail } from "./ChipRail.js";
 import { SlashPicker, slashItemId } from "./SlashPicker.js";
@@ -29,6 +31,8 @@ interface ComposerProps {
   picker: PickerState | undefined;
   commandClaim: CommandClaim | undefined;
   submitPending: boolean;
+  busyEnter: "queue" | "steer";
+  locale: SettingsLocale;
   onDraftChange(text: string, selectionStart: number): void;
   onCaretChange(text: string, selectionStart: number): void;
   onOpenPicker(selectionStart: number): void;
@@ -40,7 +44,7 @@ interface ComposerProps {
   onRemoveChip(id: string): void;
   onAttachImage(): void;
   focusPickerSearch: boolean;
-  onSubmit(): void;
+  onSubmit(mode: "queue" | "steer"): void;
   onCancel(): void;
   onSelectModel(provider: string, model: string): void;
   onSelectPermission(preset: string): void;
@@ -78,6 +82,8 @@ export function Composer({
   picker,
   commandClaim,
   submitPending,
+  busyEnter,
+  locale,
   onDraftChange,
   onCaretChange,
   onOpenPicker,
@@ -138,10 +144,10 @@ export function Composer({
     [onPickSlashItem],
   );
 
-  const send = useCallback((): void => {
-    if (status === "thinking" || sendDisabled) return;
-    onSubmit();
-  }, [onSubmit, sendDisabled, status]);
+  const send = useCallback((mode: "queue" | "steer"): void => {
+    if (sendDisabled) return;
+    onSubmit(mode);
+  }, [onSubmit, sendDisabled]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -166,7 +172,14 @@ export function Composer({
       }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        send();
+        const accelerated = e.metaKey || e.ctrlKey;
+        const mode =
+          status !== "thinking"
+            ? "queue"
+            : accelerated
+              ? busyEnter === "queue" ? "steer" : "queue"
+              : busyEnter;
+        send(mode);
       }
     },
     [
@@ -176,6 +189,8 @@ export function Composer({
       pickSlashItem,
       send,
       slashPicker,
+      busyEnter,
+      status,
     ],
   );
 
@@ -219,6 +234,7 @@ export function Composer({
       <textarea
         ref={inputRef}
         className="dsh-composer-input"
+        aria-label={settingsText(locale, "composerMessage")}
         rows={3}
         value={draft}
         placeholder="Message DSH…"
@@ -335,7 +351,7 @@ export function Composer({
             type="button"
             title={status === "thinking" ? "Stop" : "Send"}
             aria-label={status === "thinking" ? "Stop response" : "Send message"}
-            onClick={status === "thinking" ? onCancel : send}
+            onClick={status === "thinking" ? onCancel : () => send("queue")}
             disabled={status !== "thinking" && sendDisabled}
           >
             {status === "thinking" ? (

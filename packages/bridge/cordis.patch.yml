@@ -15,6 +15,19 @@
 - insert:
     - id: file-reference-local
       name: '@deepseek-ai/dsh-file-reference-local'
+    # Host-only settings registrars. The browser halves remain unmounted.
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+    - id: locale
+      name: '@deepseek-ai/dsh-client-locale'
+    - id: ui-theme
+      name: '@deepseek-ai/dsh-client-ui-theme'
+    - id: ui-conversation
+      name: '@deepseek-ai/dsh-client-ui-conversation'
+    - id: plugin-inventory
+      name: '@deepseek-ai/dsh-host-plugin-inventory'
     - id: vscode-runner
       name: '@dsh-vscode/bridge'
       inject: [agents, agentDefaultModel, sessions, userQuestions, appExit]

@@ -1,24 +1,63 @@
 import * as vscode from "vscode";
 import type { ChildProcess } from "node:child_process";
-import type { InboundMessage, OutboundMessage, ToolDiff } from "@dsh-vscode/contract";
+import path from "node:path";
+import type {
+  InboundMessage,
+  OutboundMessage,
+  ResolveSettingsPathTargetWire,
+  SettingsPathMessage,
+  ToolDiff,
+} from "@dsh-vscode/contract";
 import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
 import type { ProtocolClient } from "../protocolClient.js";
+import {
+  PartialExtensionSettingsWriteError,
+  VsCodeSettingsHost,
+  type ExtensionSettingsView,
+  type SettingsHost,
+} from "../settingsHost.js";
 import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
 import { nextStatus, protocolMismatchStatus, type DshState } from "../statusBar.js";
 import { encodeImageSelection } from "./attachments.js";
-import type { ImagesPickedMessage } from "./media/vscode.js";
+import type {
+  ImagesPickedMessage,
+  SettingsHostAction,
+  SettingsHostResultMessage,
+} from "./media/vscode.js";
 
 interface Running {
   client: ProtocolClient;
   child: ChildProcess;
-  stop(): void;
+  stop(): Promise<void>;
 }
+
+interface PendingTrustedPath {
+  action: Extract<
+    SettingsHostAction,
+    "openSettingsDocument" | "revealDshHome" | "openAgentPreset"
+  >;
+  uiRequestId: string;
+  target: ResolveSettingsPathTargetWire;
+  mode: "open" | "reveal";
+  generation: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingRestart {
+  requestId: string;
+  generation: number;
+  hostGeneration: number;
+  folder: string;
+}
+
+const MAX_PENDING_TRUSTED_PATHS = 16;
 
 export class DshChatProvider implements vscode.WebviewViewProvider {
   private readonly extensionUri: vscode.Uri;
   private readonly pm: ProcessManager;
+  private readonly settingsHost: SettingsHost;
   private readonly decorations: DecorationManager;
   private view: vscode.WebviewView | undefined;
   private running: Running | undefined;
@@ -28,14 +67,29 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private pending: ToolDiff[] = [];
   private currentSessionId: string | undefined;
   private fullAccessConfirmedFor: string | undefined;
+  private activeFolder: string | undefined;
+  private hostGeneration = 0;
+  private confirmationGeneration = 0;
+  private readonly pendingConfirmationIds = new Set<string>();
+  private readonly pendingTrustedPaths = new Map<string, PendingTrustedPath>();
+  private pendingRestart: PendingRestart | undefined;
 
-  constructor(extensionUri: vscode.Uri, pm: ProcessManager) {
+  constructor(
+    extensionUri: vscode.Uri,
+    pm: ProcessManager,
+    settingsHost: SettingsHost = new VsCodeSettingsHost(),
+  ) {
     this.extensionUri = extensionUri;
     this.pm = pm;
+    this.settingsHost = settingsHost;
     this.decorations = new DecorationManager();
   }
 
   dispose(): void {
+    this.cancelPendingRestart("DSH restart cancelled: provider disposed");
+    this.startGeneration += 1;
+    this.startingChild = false;
+    this.invalidateHostWork("Extension host disposed");
     this.decorations.dispose();
   }
 
@@ -70,6 +124,120 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
 
     if (kind === "confirmFullAccess") {
       void this.confirmFullAccess();
+      return;
+    }
+
+    if (kind === "confirmSettingsFullAccess") {
+      const requestId = (cmd as { requestId?: unknown }).requestId;
+      if (typeof requestId === "string" && requestId.length > 0) {
+        void this.confirmSettingsFullAccess(requestId);
+      }
+      return;
+    }
+
+    const requestId = (cmd as { requestId?: unknown }).requestId;
+    if (
+      kind === "getExtensionSettings" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      void this.readExtensionSettings(requestId);
+      return;
+    }
+    if (
+      kind === "updateExtensionSettings" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      const binaryPath = (cmd as { binaryPath?: unknown }).binaryPath;
+      const handshakeTimeoutMs =
+        (cmd as { handshakeTimeoutMs?: unknown }).handshakeTimeoutMs;
+      if (
+        typeof binaryPath !== "string" ||
+        typeof handshakeTimeoutMs !== "number" ||
+        !Number.isInteger(handshakeTimeoutMs)
+      ) {
+        this.postHostFailure(
+          requestId,
+          "write",
+          new Error(
+            "Extension settings require a string binary path and integer timeout",
+          ),
+        );
+        return;
+      }
+      void this.writeExtensionSettings(requestId, {
+        binaryPath,
+        handshakeTimeoutMs,
+      });
+      return;
+    }
+    if (
+      kind === "openExtensionSettings" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      void this.runHostAction(
+        requestId,
+        "openExtensionSettings",
+        () => this.settingsHost.openExtensionSettings(),
+      );
+      return;
+    }
+    if (
+      kind === "openSettingsDocument" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      this.resolveTrustedPath(
+        requestId,
+        "openSettingsDocument",
+        { kind: "settings-document", prepare: true },
+        "open",
+      );
+      return;
+    }
+    if (
+      kind === "revealDshHome" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      this.resolveTrustedPath(
+        requestId,
+        "revealDshHome",
+        { kind: "dsh-home" },
+        "reveal",
+      );
+      return;
+    }
+    if (
+      kind === "openAgentPreset" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      const presetId = (cmd as { presetId?: unknown }).presetId;
+      if (typeof presetId === "string" && presetId.length > 0) {
+        this.resolveTrustedPath(
+          requestId,
+          "openAgentPreset",
+          { kind: "agent-preset", presetId },
+          "open",
+        );
+      } else {
+        this.postHostFailure(
+          requestId,
+          "openAgentPreset",
+          new Error("Invalid settings path target"),
+        );
+      }
+      return;
+    }
+    if (
+      kind === "restartDsh" &&
+      typeof requestId === "string" &&
+      requestId.length > 0
+    ) {
+      void this.restart(requestId);
       return;
     }
 
@@ -166,6 +334,23 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  private async confirmSettingsFullAccess(requestId: string): Promise<void> {
+    const generation = this.confirmationGeneration;
+    this.pendingConfirmationIds.add(requestId);
+    const choice = await vscode.window.showWarningMessage(
+      "Full Access lets new sessions reduce confirmation steps and perform more actions directly, including sensitive operations, file changes, or external commands. Only use it when you trust subsequent tasks.",
+      { modal: true },
+      "Enable Full Access",
+    );
+    this.pendingConfirmationIds.delete(requestId);
+    if (generation !== this.confirmationGeneration) return;
+    this.view?.webview.postMessage({
+      kind: "settingsFullAccessConfirmation",
+      requestId,
+      confirmed: choice === "Enable Full Access",
+    });
+  }
+
   async startActiveFolder(): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!folder) {
@@ -178,6 +363,18 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
+    if (
+      this.pendingRestart !== undefined &&
+      this.pendingRestart.folder !== folder
+    ) {
+      this.cancelPendingRestart(
+        "DSH restart cancelled: workspace folder changed",
+      );
+      this.startGeneration += 1;
+      this.startingChild = false;
+      this.invalidateHostWork("Workspace folder changed");
+    }
+    this.activeFolder = folder;
     if (this.running || this.startingChild) return;
 
     const generation = ++this.startGeneration;
@@ -190,21 +387,26 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     try {
       const running = await this.pm.start(folder);
       if (generation !== this.startGeneration) {
-        running.stop();
+        await running.stop();
         return;
       }
       this.running = running;
-      running.client.onMessage((m: OutboundMessage) => this.handleOutbound(m));
+      running.client.onMessage((m: OutboundMessage) =>
+        this.handleOutbound(m, generation));
 
       // Post-boot crashes (the handshake already arrived, but dsh exits later) are
       // surfaced here. Spawn errors and handshake timeouts already rejected `start()`
       // and are handled by the `catch` below.
       running.child.on("exit", (code, signal) => {
-        const wasCurrent = this.running?.child === running.child;
+        const wasCurrent =
+          generation === this.startGeneration &&
+          this.running?.child === running.child;
         if (wasCurrent) {
           this.running = undefined;
         }
-        if (!wasCurrent && code === 0 && !signal) return;
+        if (!wasCurrent) return;
+        this.status = "error";
+        this.invalidateHostWork("DSH disconnected");
         const detail =
           code !== null
             ? `dsh process exited with code ${code}`
@@ -219,20 +421,364 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.view?.webview.postMessage({ kind: "status", state: "error", detail });
       return;
     } finally {
-      this.startingChild = false;
+      if (generation === this.startGeneration) {
+        this.startingChild = false;
+      }
     }
   }
 
   async stop(): Promise<void> {
+    this.cancelPendingRestart("DSH restart cancelled: stop requested");
     this.startGeneration += 1;
+    this.startingChild = false;
     const running = this.running;
     this.running = undefined;
     this.currentSessionId = undefined;
     this.fullAccessConfirmedFor = undefined;
+    this.invalidateHostWork("DSH stopped");
     if (running) await running.stop();
   }
 
-  private handleOutbound(m: OutboundMessage): void {
+  private postHostResult(message: SettingsHostResultMessage): void {
+    this.view?.webview.postMessage(message);
+  }
+
+  private async readExtensionSettings(requestId: string): Promise<void> {
+    const generation = this.hostGeneration;
+    try {
+      const settings = this.settingsHost.read();
+      if (generation !== this.hostGeneration) return;
+      this.postHostResult({
+        kind: "settingsHostResult",
+        requestId,
+        action: "read",
+        result: { ok: true, settings },
+      });
+    } catch (error) {
+      if (generation !== this.hostGeneration) return;
+      this.postHostFailure(requestId, "read", error);
+    }
+  }
+
+  private async writeExtensionSettings(
+    requestId: string,
+    settings: ExtensionSettingsView,
+  ): Promise<void> {
+    const generation = this.hostGeneration;
+    try {
+      const previous = this.settingsHost.read();
+      await this.settingsHost.write(settings);
+      if (generation !== this.hostGeneration) return;
+      const changed = previous.binaryPath !== settings.binaryPath;
+      this.postHostResult({
+        kind: "settingsHostResult",
+        requestId,
+        action: "write",
+        result: {
+          ok: true,
+          settings,
+          ...(changed ? { restartRequired: true } : {}),
+        },
+      });
+    } catch (error) {
+      if (generation !== this.hostGeneration) return;
+      this.postHostFailure(requestId, "write", error);
+    }
+  }
+
+  private async runHostAction(
+    requestId: string,
+    action: SettingsHostAction,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const generation = this.hostGeneration;
+    try {
+      await run();
+      if (generation !== this.hostGeneration) return;
+      this.postHostResult({
+        kind: "settingsHostResult",
+        requestId,
+        action,
+        result: { ok: true },
+      });
+    } catch (error) {
+      if (generation !== this.hostGeneration) return;
+      this.postHostFailure(requestId, action, error);
+    }
+  }
+
+  private postHostFailure(
+    requestId: string,
+    action: SettingsHostAction,
+    error: unknown,
+  ): void {
+    const settings =
+      error instanceof PartialExtensionSettingsWriteError
+        ? error.actual
+        : undefined;
+    this.postHostResult({
+      kind: "settingsHostResult",
+      requestId,
+      action,
+      result: {
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+        ...(settings === undefined ? {} : { settings }),
+      },
+    });
+  }
+
+  private resolveTrustedPath(
+    uiRequestId: string,
+    action: PendingTrustedPath["action"],
+    target: ResolveSettingsPathTargetWire,
+    mode: PendingTrustedPath["mode"],
+  ): void {
+    if (!this.running) {
+      this.postHostFailure(uiRequestId, action, new Error("DSH is disconnected"));
+      return;
+    }
+    const requestId = crypto.randomUUID();
+    const command = { kind: "resolveSettingsPath" as const, requestId, target };
+    if (!isInboundMessage(command)) {
+      this.postHostFailure(
+        uiRequestId,
+        action,
+        new Error("Invalid settings path target"),
+      );
+      return;
+    }
+    if (this.pendingTrustedPaths.size >= MAX_PENDING_TRUSTED_PATHS) {
+      this.postHostFailure(
+        uiRequestId,
+        action,
+        new Error("Too many settings path requests are pending"),
+      );
+      return;
+    }
+    const generation = this.hostGeneration;
+    const timer = setTimeout(() => {
+      const pending = this.pendingTrustedPaths.get(requestId);
+      if (pending === undefined || pending.generation !== generation) return;
+      this.pendingTrustedPaths.delete(requestId);
+      this.postHostFailure(
+        pending.uiRequestId,
+        pending.action,
+        new Error("Timed out resolving settings path"),
+      );
+    }, 10_000);
+    this.pendingTrustedPaths.set(requestId, {
+      action,
+      uiRequestId,
+      target,
+      mode,
+      generation,
+      timer,
+    });
+    this.running.client.send(command);
+  }
+
+  private async handleSettingsPath(message: SettingsPathMessage): Promise<void> {
+    const pending = this.pendingTrustedPaths.get(message.requestId);
+    if (
+      pending === undefined ||
+      pending.generation !== this.hostGeneration
+    ) {
+      return;
+    }
+    this.pendingTrustedPaths.delete(message.requestId);
+    clearTimeout(pending.timer);
+    if (!message.result.ok) {
+      this.postHostFailure(
+        pending.uiRequestId,
+        pending.action,
+        new Error(message.result.error.message),
+      );
+      return;
+    }
+    if (message.result.target !== pending.target.kind) {
+      this.postHostFailure(
+        pending.uiRequestId,
+        pending.action,
+        new Error("Resolved settings target did not match"),
+      );
+      return;
+    }
+    if (!path.isAbsolute(message.result.path)) {
+      this.postHostFailure(
+        pending.uiRequestId,
+        pending.action,
+        new Error("Resolved settings path was not absolute and local"),
+      );
+      return;
+    }
+    try {
+      await this.settingsHost.openTrustedPath(message.result.path, pending.mode);
+      if (pending.generation !== this.hostGeneration) return;
+      this.postHostResult({
+        kind: "settingsHostResult",
+        requestId: pending.uiRequestId,
+        action: pending.action,
+        result: { ok: true },
+      });
+    } catch (error) {
+      if (pending.generation !== this.hostGeneration) return;
+      this.postHostFailure(pending.uiRequestId, pending.action, error);
+    }
+  }
+
+  private invalidateHostWork(detail: string): void {
+    this.hostGeneration += 1;
+    this.confirmationGeneration += 1;
+    for (const requestId of this.pendingConfirmationIds) {
+      this.view?.webview.postMessage({
+        kind: "settingsFullAccessConfirmation",
+        requestId,
+        confirmed: false,
+      });
+    }
+    this.pendingConfirmationIds.clear();
+    for (const pending of this.pendingTrustedPaths.values()) {
+      clearTimeout(pending.timer);
+      this.postHostFailure(
+        pending.uiRequestId,
+        pending.action,
+        new Error(detail),
+      );
+    }
+    this.pendingTrustedPaths.clear();
+  }
+
+  private async restart(requestId: string): Promise<void> {
+    if (this.pendingRestart !== undefined) {
+      this.cancelPendingRestart(
+        "DSH restart cancelled: superseded by another restart",
+      );
+      this.startingChild = false;
+    }
+    if (
+      this.startingChild ||
+      this.status === "thinking" ||
+      this.status === "awaiting-approval"
+    ) {
+      this.postHostFailure(requestId, "restart", new Error("DSH is busy"));
+      return;
+    }
+    const folder =
+      this.activeFolder ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (folder === undefined) {
+      this.postHostFailure(
+        requestId,
+        "restart",
+        new Error("No workspace folder open"),
+      );
+      return;
+    }
+
+    const sessionId = this.currentSessionId;
+    const generation = ++this.startGeneration;
+    this.startingChild = true;
+    const old = this.running;
+    this.running = undefined;
+    this.invalidateHostWork("DSH restarted");
+    const hostGeneration = this.hostGeneration;
+    const pending: PendingRestart = {
+      requestId,
+      generation,
+      hostGeneration,
+      folder,
+    };
+    this.pendingRestart = pending;
+    try {
+      if (old !== undefined) await old.stop();
+      const running = await this.pm.start(folder);
+      if (
+        generation !== this.startGeneration ||
+        hostGeneration !== this.hostGeneration
+      ) {
+        await running.stop();
+        return;
+      }
+      this.running = running;
+      this.activeFolder = folder;
+      running.client.onMessage((message: OutboundMessage) =>
+        this.handleOutbound(message, generation));
+      running.child.on("exit", (code, signal) => {
+        if (
+          generation !== this.startGeneration ||
+          this.running?.child !== running.child
+        ) {
+          return;
+        }
+        this.running = undefined;
+        this.status = "error";
+        this.invalidateHostWork("DSH disconnected");
+        const detail =
+          code !== null
+            ? `dsh process exited with code ${code}`
+            : `dsh process terminated by ${signal ?? "signal"}`;
+        this.view?.webview.postMessage({ kind: "hostDisconnected", detail });
+      });
+      if (sessionId !== undefined) {
+        running.client.send({ kind: "resume", sessionId });
+      }
+      this.settleRestart(pending, { ok: true });
+    } catch (error) {
+      if (
+        generation === this.startGeneration &&
+        hostGeneration === this.hostGeneration
+      ) {
+        this.status = "error";
+        this.settleRestart(pending, {
+          ok: false,
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } finally {
+      if (generation === this.startGeneration) {
+        this.startingChild = false;
+      }
+    }
+  }
+
+  private cancelPendingRestart(detail: string): void {
+    const pending = this.pendingRestart;
+    if (pending === undefined) return;
+    this.settleRestart(pending, { ok: false, detail });
+  }
+
+  private settleRestart(
+    pending: PendingRestart,
+    result: { ok: true } | { ok: false; detail: string },
+  ): void {
+    if (this.pendingRestart !== pending) return;
+    if (result.ok) {
+      this.postHostResult({
+        kind: "settingsHostResult",
+        requestId: pending.requestId,
+        action: "restart",
+        result,
+      });
+    } else {
+      this.postHostResult({
+        kind: "settingsHostResult",
+        requestId: pending.requestId,
+        action: "restart",
+        result,
+      });
+    }
+    this.pendingRestart = undefined;
+  }
+
+  private handleOutbound(
+    m: OutboundMessage,
+    generation = this.startGeneration,
+  ): void {
+    if (generation !== this.startGeneration) return;
+    if (m.kind === "settingsPath") {
+      void this.handleSettingsPath(m);
+      return;
+    }
     // Version handshake is host-only: check it, do not forward to the webview.
     if (m.kind === "hello") {
       if (m.version !== PROTOCOL_VERSION) {

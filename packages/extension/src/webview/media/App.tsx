@@ -6,8 +6,13 @@ import React, {
   useState,
 } from "react";
 import type {
+  AgentPresetContentMessage,
   AskAnswerWire,
   FileReferenceItem,
+  SettingsInvalidatedMessage,
+  SettingsMutationMessage,
+  SettingsSectionMessage,
+  SettingsSectionId,
   SlashMenuItem,
 } from "@dsh-vscode/contract";
 import {
@@ -24,9 +29,43 @@ import { StreamView } from "./components/StreamView.js";
 import { ApprovalBanner } from "./components/ApprovalBanner.js";
 import { Header } from "./components/Header.js";
 import { RecentPopover } from "./components/RecentPopover.js";
-import { acquireVsCodeApi, type UiCommand } from "./vscode.js";
+import {
+  SettingsModal,
+  type SettingsCloseReason,
+} from "./settings/SettingsModal.js";
+import {
+  initialSettingsState,
+  settingsReducer,
+} from "./settings/reducer.js";
+import {
+  readRetainedLocale,
+  retainedLocaleState,
+} from "./settings/retainedLocale.js";
+import type { SettingsUiSectionId } from "./settings/types.js";
+import { GeneralSection } from "./settings/sections/general/GeneralSection.js";
+import { GeneralController } from "./settings/sections/general/GeneralController.js";
+import { ExtensionSection } from "./settings/sections/extension/ExtensionSection.js";
+import { ExtensionController } from "./settings/sections/extension/ExtensionController.js";
+import { ModelsSection } from "./settings/sections/models/ModelsSection.js";
+import { ModelsController } from "./settings/sections/models/ModelsController.js";
+import { PluginsSection } from "./settings/sections/plugins/PluginsSection.js";
+import { PluginsController } from "./settings/sections/plugins/PluginsController.js";
+import { AgentPresetsSection } from "./settings/sections/agent-presets/AgentPresetsSection.js";
+import { AgentPresetsController } from "./settings/sections/agent-presets/AgentPresetsController.js";
+import {
+  acquireVsCodeApi,
+  type SettingsHostResultMessage,
+  type UiCommand,
+} from "./vscode.js";
 
 const vscode = acquireVsCodeApi();
+
+function initialSettingsFromHost(): typeof initialSettingsState {
+  const locale = readRetainedLocale(vscode.getState());
+  return locale === undefined
+    ? initialSettingsState
+    : { ...initialSettingsState, locale };
+}
 
 function tokenAt(
   text: string,
@@ -63,19 +102,202 @@ function sameSlashToken(
   );
 }
 
+type OwnedMutationAcceptance = {
+  ownsNamespace: (namespace: string) => boolean | undefined;
+  accepted: boolean;
+  coAccepted?: boolean;
+};
+
+function suppressOwnedMutationSuccess(
+  mutation: SettingsMutationMessage,
+  owners: readonly OwnedMutationAcceptance[],
+): boolean {
+  if (!mutation.result.ok || mutation.result.namespace === undefined) {
+    return false;
+  }
+  const namespace = mutation.result.namespace.namespace;
+  for (const owner of owners) {
+    if (owner.ownsNamespace(namespace) !== true) continue;
+    if (!owner.accepted && owner.coAccepted !== true) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function App(): JSX.Element {
   const [state, dispatch] = useReducer(reduce, initialState);
+  const [sectionConfirmation, setSectionConfirmation] = useState(false);
+  const [settingsState, settingsDispatch] = useReducer(
+    settingsReducer,
+    undefined,
+    initialSettingsFromHost,
+  );
+  const [, renderExtensionController] = useReducer(
+    (value: number) => value + 1,
+    0,
+  );
+  const [, renderModelsController] = useReducer(
+    (value: number) => value + 1,
+    0,
+  );
+  const [, renderPluginsController] = useReducer(
+    (value: number) => value + 1,
+    0,
+  );
+  const [, renderAgentPresetsController] = useReducer(
+    (value: number) => value + 1,
+    0,
+  );
   const [recentOpen, setRecentOpen] = useState(false);
   const [focusPickerSearch, setFocusPickerSearch] = useState(false);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsStateRef = useRef(settingsState);
+  const settingsConfirmationResolvers = useRef(
+    new Map<string, (confirmed: boolean) => void>(),
+  );
+  const generalControllerRef = useRef<GeneralController>();
+  const extensionControllerRef = useRef<ExtensionController>();
+  const modelsControllerRef = useRef<ModelsController>();
+  const pluginsControllerRef = useRef<PluginsController>();
+  const agentPresetsControllerRef = useRef<AgentPresetsController>();
+  settingsStateRef.current = settingsState;
+  useEffect(() => {
+    vscode.setState(retainedLocaleState(settingsState.locale));
+  }, [settingsState.locale]);
   const caretRef = useRef(0);
   const draftRef = useRef(state.draft);
   draftRef.current = state.draft;
 
   useEffect(() => {
+    const settleSettingsConfirmations = (): void => {
+      for (const resolve of settingsConfirmationResolvers.current.values()) {
+        resolve(false);
+      }
+      settingsConfirmationResolvers.current.clear();
+    };
     const onMessage = (event: MessageEvent<unknown>): void => {
       const data = event.data;
       // extension -> webview: raw OutboundMessage (has a `kind` discriminant)
       if (typeof data === "object" && data !== null && "kind" in data) {
+        if (data.kind === "settingsFullAccessConfirmation") {
+          const response = data as {
+            requestId?: unknown;
+            confirmed?: unknown;
+          };
+          if (
+            typeof response.requestId === "string" &&
+            typeof response.confirmed === "boolean"
+          ) {
+            const resolve = settingsConfirmationResolvers.current.get(
+              response.requestId,
+            );
+            settingsConfirmationResolvers.current.delete(response.requestId);
+            resolve?.(response.confirmed);
+          }
+          return;
+        } else if (data.kind === "settingsHostResult") {
+          extensionControllerRef.current?.receive(
+            data as SettingsHostResultMessage,
+          );
+          agentPresetsControllerRef.current?.receiveHost(
+            data as SettingsHostResultMessage,
+          );
+          return;
+        } else if (data.kind === "settingsSection") {
+          const message = data as SettingsSectionMessage;
+          const modelsState = settingsStateRef.current.sections.models;
+          if (
+            message.view !== undefined &&
+            message.view.section === "models" &&
+            modelsState.status === "loading" &&
+            modelsState.requestId === message.requestId
+          ) {
+            modelsControllerRef.current?.updateView(message.view);
+          }
+          const pluginsState = settingsStateRef.current.sections.plugins;
+          if (
+            message.view !== undefined &&
+            message.view.section === "plugins" &&
+            pluginsState.status === "loading" &&
+            pluginsState.requestId === message.requestId
+          ) {
+            pluginsControllerRef.current?.updateView(message.view);
+          }
+          const presetsState =
+            settingsStateRef.current.sections["agent-presets"];
+          if (
+            message.view !== undefined &&
+            message.view.section === "agent-presets" &&
+            presetsState.status === "loading" &&
+            presetsState.requestId === message.requestId
+          ) {
+            agentPresetsControllerRef.current?.updateView(message.view);
+          }
+          settingsDispatch({
+            kind: "settingsSectionReceived",
+            message,
+          });
+        } else if (data.kind === "agentPresetContent") {
+          agentPresetsControllerRef.current?.receiveContent(
+            data as AgentPresetContentMessage,
+          );
+        } else if (data.kind === "settingsInvalidated") {
+          settingsDispatch({
+            kind: "settingsInvalidated",
+            message: data as SettingsInvalidatedMessage,
+          });
+        } else if (data.kind === "settingsMutation") {
+          const mutation = data as SettingsMutationMessage;
+          const modelsAccepted =
+            modelsControllerRef.current?.receive(mutation) === true;
+          const pluginsAccepted =
+            pluginsControllerRef.current?.receive(mutation) === true;
+          const presetsAccepted =
+            agentPresetsControllerRef.current?.receiveMutation(mutation) === true;
+          const generalAccepted =
+            generalControllerRef.current?.receive(mutation) === true;
+          if (
+            suppressOwnedMutationSuccess(mutation, [
+              {
+                ownsNamespace: (namespace) =>
+                  modelsControllerRef.current?.ownsNamespace(namespace),
+                accepted: modelsAccepted,
+              },
+              {
+                ownsNamespace: (namespace) =>
+                  generalControllerRef.current?.ownsNamespace(namespace),
+                accepted: generalAccepted,
+                coAccepted: presetsAccepted,
+              },
+              {
+                ownsNamespace: (namespace) =>
+                  pluginsControllerRef.current?.ownsNamespace(namespace),
+                accepted: pluginsAccepted,
+              },
+            ])
+          ) {
+            return;
+          }
+          settingsDispatch({
+            kind: "settingsMutationReceived",
+            message: mutation,
+          });
+        } else if (data.kind === "hostDisconnected") {
+          settleSettingsConfirmations();
+          extensionControllerRef.current?.invalidate();
+          generalControllerRef.current?.disconnect();
+          modelsControllerRef.current?.disconnect();
+          pluginsControllerRef.current?.disconnect();
+          agentPresetsControllerRef.current?.disconnect();
+          const detail =
+            "detail" in data && typeof data.detail === "string"
+              ? data.detail
+              : "DSH disconnected";
+          settingsDispatch({ kind: "settingsDisconnected", detail });
+        } else if (data.kind === "ready") {
+          settingsDispatch({ kind: "settingsConnected" });
+        }
         dispatch(data as UiMessage);
       }
     };
@@ -85,13 +307,244 @@ export function App(): JSX.Element {
       cmd: { kind: "webviewReady" },
     };
     vscode.postMessage(message);
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      settleSettingsConfirmations();
+      extensionControllerRef.current?.invalidate();
+      generalControllerRef.current?.disconnect();
+      modelsControllerRef.current?.disconnect();
+      pluginsControllerRef.current?.disconnect();
+      agentPresetsControllerRef.current?.disconnect();
+    };
   }, []);
 
   const post = useCallback((cmd: UiCommand["cmd"]): void => {
     const message: UiCommand = { type: "dsh/ui", cmd };
     vscode.postMessage(message);
   }, []);
+
+  const requestSettingsSection = useCallback(
+    (section: SettingsSectionId, force = false): void => {
+      const current = settingsStateRef.current.sections[section];
+      if (!settingsStateRef.current.connected) return;
+      if (
+        !force &&
+        (current.status === "loading" ||
+          (current.status === "ready" && !current.stale))
+      ) {
+        return;
+      }
+      const requestId = crypto.randomUUID();
+      const action = {
+        kind: "settingsSectionRequested",
+        section,
+        requestId,
+      } as const;
+      settingsStateRef.current = settingsReducer(
+        settingsStateRef.current,
+        action,
+      );
+      settingsDispatch(action);
+      post({ kind: "getSettingsSection", requestId, section });
+    },
+    [post],
+  );
+  if (generalControllerRef.current === undefined) {
+    generalControllerRef.current = new GeneralController(
+      (command) => post(command),
+      () => requestSettingsSection("general", true),
+    );
+  }
+  const generalController = generalControllerRef.current;
+  if (modelsControllerRef.current === undefined) {
+    modelsControllerRef.current = new ModelsController(
+      (command) => post(command),
+      () => requestSettingsSection("models", true),
+    );
+  }
+  const modelsController = modelsControllerRef.current;
+  useEffect(
+    () => modelsController.subscribe(() => renderModelsController()),
+    [modelsController],
+  );
+  if (pluginsControllerRef.current === undefined) {
+    pluginsControllerRef.current = new PluginsController(
+      (command) => post(command),
+      () => requestSettingsSection("plugins", true),
+      undefined,
+      () =>
+        settingsDispatch({ kind: "settingsRestartRequired", required: true }),
+    );
+  }
+  const pluginsController = pluginsControllerRef.current;
+  useEffect(
+    () => pluginsController.subscribe(() => renderPluginsController()),
+    [pluginsController],
+  );
+  if (agentPresetsControllerRef.current === undefined) {
+    agentPresetsControllerRef.current = new AgentPresetsController(
+      (command) => post(command),
+      (command) => post(command),
+      () => requestSettingsSection("agent-presets", true),
+      () => requestSettingsSection("general", true),
+    );
+  }
+  const agentPresetsController = agentPresetsControllerRef.current;
+  useEffect(
+    () =>
+      agentPresetsController.subscribe(() => renderAgentPresetsController()),
+    [agentPresetsController],
+  );
+  if (extensionControllerRef.current === undefined) {
+    extensionControllerRef.current = new ExtensionController(
+      (command) => post(command),
+      (required) =>
+        settingsDispatch({ kind: "settingsRestartRequired", required }),
+    );
+  }
+  const extensionController = extensionControllerRef.current;
+  useEffect(
+    () => extensionController.subscribe(() => renderExtensionController()),
+    [extensionController],
+  );
+
+  const activeSettingsSection =
+    settingsState.activeSection === "extension"
+      ? undefined
+      : settingsState.sections[settingsState.activeSection];
+
+  useEffect(() => {
+    const current = settingsStateRef.current.sections.general;
+    if (
+      settingsState.connectionEpoch === 0 ||
+      !settingsState.connected ||
+      (current.status !== "idle" && !current.stale && current.available)
+    ) {
+      return;
+    }
+    requestSettingsSection("general");
+  }, [
+    requestSettingsSection,
+    settingsState.connected,
+    settingsState.connectionEpoch,
+  ]);
+
+  useEffect(() => {
+    if (!settingsState.open || !settingsState.connected) return;
+    const section = settingsState.activeSection;
+    if (section === "extension") return;
+    if (
+      activeSettingsSection?.status === "idle" ||
+      (activeSettingsSection?.stale === true &&
+        activeSettingsSection.status !== "error")
+    ) {
+      requestSettingsSection(section);
+    }
+  }, [
+    activeSettingsSection?.stale,
+    activeSettingsSection?.status,
+    requestSettingsSection,
+    settingsState.activeSection,
+    settingsState.connected,
+    settingsState.open,
+  ]);
+
+  useEffect(() => {
+    if (settingsState.invalidationSeq === 0) return;
+    const current = settingsStateRef.current;
+    if (!current.open || !current.connected) return;
+    const section = current.activeSection;
+    if (section === "extension") return;
+    if (current.sections[section].status === "error") {
+      requestSettingsSection(section, true);
+    }
+  }, [requestSettingsSection, settingsState.invalidationSeq]);
+
+  const openSettings = useCallback((): void => {
+    if (settingsStateRef.current.open) return;
+    setRecentOpen(false);
+    setFocusPickerSearch(false);
+    dispatch({ kind: "pickerClosedForSettings" });
+    settingsDispatch({ kind: "openSettings" });
+    requestSettingsSection("general");
+  }, [requestSettingsSection]);
+
+  const activateSettingsSection = useCallback(
+    (section: SettingsUiSectionId): void => {
+      settingsDispatch({ kind: "activateSettingsSection", section });
+    },
+    [],
+  );
+
+  const retrySettingsSection = useCallback(
+    (section: SettingsSectionId): void => {
+      requestSettingsSection(section, true);
+    },
+    [requestSettingsSection],
+  );
+
+  const confirmSettingsFullAccess = useCallback((): Promise<boolean> => {
+    const requestId = crypto.randomUUID();
+    return new Promise((resolve) => {
+      settingsConfirmationResolvers.current.set(requestId, resolve);
+      post({ kind: "confirmSettingsFullAccess", requestId });
+    });
+  }, [post]);
+
+  const closeSettings = useCallback((
+    _reason: SettingsCloseReason,
+    dirty: boolean,
+  ): void => {
+    settingsDispatch(
+      dirty
+        ? {
+            kind: "settingsConfirmationChanged",
+            confirmation: { kind: "dirty-close" },
+          }
+        : { kind: "closeSettings" },
+    );
+  }, []);
+
+  const toggleSettings = useCallback((): void => {
+    if (!settingsStateRef.current.open) {
+      openSettings();
+      return;
+    }
+    closeSettings(
+      "gear",
+      extensionController.snapshot().dirty ||
+        modelsController.snapshot().dirty ||
+        pluginsController.snapshot().dirty ||
+        agentPresetsController.snapshot().dirty,
+    );
+  }, [
+    agentPresetsController,
+    closeSettings,
+    extensionController,
+    modelsController,
+    openSettings,
+    pluginsController,
+  ]);
+
+  const cancelSettingsClose = useCallback((): void => {
+    settingsDispatch({
+      kind: "settingsConfirmationChanged",
+      confirmation: undefined,
+    });
+  }, []);
+
+  const discardSettingsClose = useCallback((): void => {
+    extensionController.discard();
+    modelsController.discardAll();
+    pluginsController.discardAll();
+    agentPresetsController.discardAll();
+    settingsDispatch({ kind: "closeSettings" });
+  }, [
+    agentPresetsController,
+    extensionController,
+    modelsController,
+    pluginsController,
+  ]);
 
   useEffect(() => {
     const picker = state.picker;
@@ -299,7 +752,7 @@ export function App(): JSX.Element {
     post({ kind: "attachImage" });
   }, [post]);
 
-  const onSubmit = useCallback((): void => {
+  const onSubmit = useCallback((mode: "queue" | "steer"): void => {
     const command = serializeCommand(state);
     if (command !== undefined) {
       if (
@@ -316,15 +769,27 @@ export function App(): JSX.Element {
       post({ kind: "executeSlashCommand", ...command });
       return;
     }
-    dispatch({ kind: "submitStarted" });
-    post({ kind: "submit", ...serializeDraft(state) });
+    const requestId = crypto.randomUUID();
+    dispatch({ kind: "submitStarted", requestId, mode });
+    post({ kind: "submit", requestId, mode, ...serializeDraft(state) });
   }, [post, state]);
+
+  const busyEnterNamespace =
+    settingsState.sections.general.view?.section === "general"
+      ? settingsState.sections.general.view.namespaces.find(
+          (namespace) => namespace.namespace === "ui-conversation",
+        )
+      : undefined;
+  const busyEnter =
+    busyEnterNamespace?.value.busyEnter === "steer" ? "steer" : "queue";
 
   return (
     <div className="dsh-root">
       <Header
         busy={state.starting || state.status === "thinking"}
         recentOpen={recentOpen}
+        settingsOpen={settingsState.open}
+        settingsButtonRef={settingsButtonRef}
         onRecent={() => {
           setRecentOpen((open) => {
             if (!open) post({ kind: "listSessions" });
@@ -332,6 +797,7 @@ export function App(): JSX.Element {
           });
         }}
         onCloseRecent={() => setRecentOpen(false)}
+        onSettings={toggleSettings}
         onNewChat={() => {
           if (
             state.status === "thinking" ||
@@ -379,6 +845,8 @@ export function App(): JSX.Element {
         picker={state.picker}
         commandClaim={state.commandClaim}
         submitPending={state.submitPending}
+        busyEnter={busyEnter}
+        locale={settingsState.locale}
         focusPickerSearch={focusPickerSearch}
         onDraftChange={onDraftChange}
         onCaretChange={onCaretChange}
@@ -402,6 +870,75 @@ export function App(): JSX.Element {
         }
         onRequestFullAccess={() => post({ kind: "confirmFullAccess" })}
       />
+      {settingsState.open ? (
+        <SettingsModal
+          state={settingsState}
+          controller={{
+            dirty:
+              extensionController.snapshot().dirty ||
+              modelsController.snapshot().dirty ||
+              pluginsController.snapshot().dirty ||
+              agentPresetsController.snapshot().dirty,
+            confirmation: sectionConfirmation,
+          }}
+          returnFocusRef={settingsButtonRef}
+          onSection={activateSettingsSection}
+          onRetry={retrySettingsSection}
+          onRequestClose={closeSettings}
+          onCancelClose={cancelSettingsClose}
+          onDiscardClose={discardSettingsClose}
+        >
+          {settingsState.activeSection === "general" &&
+          settingsState.sections.general.view?.section === "general" ? (
+            <GeneralSection
+              controller={generalController}
+              view={settingsState.sections.general.view}
+              locale={settingsState.locale}
+              confirmFullAccess={confirmSettingsFullAccess}
+            />
+          ) : null}
+          {settingsState.activeSection === "extension" ? (
+            <ExtensionSection
+              controller={extensionController}
+              locale={settingsState.locale}
+              restartDisabled={
+                state.starting ||
+                state.status === "thinking" ||
+                state.status === "awaiting-approval"
+              }
+            />
+          ) : null}
+          {settingsState.activeSection === "models" &&
+          settingsState.sections.models.view?.section === "models" ? (
+            <ModelsSection
+              controller={modelsController}
+              view={settingsState.sections.models.view}
+              locale={settingsState.locale}
+              onCredential={(command) => post(command)}
+              onConfirmationChange={setSectionConfirmation}
+            />
+          ) : null}
+          {settingsState.activeSection === "plugins" &&
+          settingsState.sections.plugins.view?.section === "plugins" ? (
+            <PluginsSection
+              controller={pluginsController}
+              view={settingsState.sections.plugins.view}
+              locale={settingsState.locale}
+              onCredential={(command) => post(command)}
+            />
+          ) : null}
+          {settingsState.activeSection === "agent-presets" &&
+          settingsState.sections["agent-presets"].view?.section ===
+            "agent-presets" ? (
+            <AgentPresetsSection
+              controller={agentPresetsController}
+              view={settingsState.sections["agent-presets"].view}
+              locale={settingsState.locale}
+              onConfirmationChange={setSectionConfirmation}
+            />
+          ) : null}
+        </SettingsModal>
+      ) : null}
     </div>
   );
 }

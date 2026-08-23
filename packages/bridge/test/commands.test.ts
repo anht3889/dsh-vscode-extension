@@ -24,6 +24,15 @@ function hooks() {
       listFileReferences: vi.fn(),
       listSlashItems: vi.fn(),
       executeSlashCommand: vi.fn(),
+      getSection: vi.fn(),
+      mutate: vi.fn(),
+      setCredential: vi.fn(),
+      unsetCredential: vi.fn(),
+      copyPreset: vi.fn(),
+      deletePreset: vi.fn(),
+      readPreset: vi.fn(),
+      resolvePath: vi.fn(),
+      dispose: vi.fn(),
     },
     provider: {
       ask: vi.fn<(request: AskUserQuestionRequest) => Promise<AskUserQuestionAnswer>>(),
@@ -35,11 +44,19 @@ function hooks() {
 const inertCtx = { get: vi.fn<() => undefined>(() => undefined) } as never;
 
 describe("dispatchCommand", () => {
-  it("maps a submit command to runner.submit(text)", () => {
+  it("maps correlated queue intent to runner.submit", () => {
     const h = hooks();
-    const msg: InboundMessage = { kind: "submit", text: "hi" };
+    const msg: InboundMessage = {
+      kind: "submit",
+      requestId: "submit-1",
+      mode: "queue",
+      text: "hi",
+    };
     dispatchCommand(inertCtx, msg, h);
-    expect(h.runner.submit).toHaveBeenCalledWith("hi", {});
+    expect(h.runner.submit).toHaveBeenCalledWith("hi", {
+      requestId: "submit-1",
+      mode: "queue",
+    });
     expect(h.runner.cancel).not.toHaveBeenCalled();
     expect(h.provider.resolve).not.toHaveBeenCalled();
   });
@@ -142,6 +159,8 @@ describe("dispatchCommand", () => {
       inertCtx,
       {
         kind: "submit",
+        requestId: "submit-2",
+        mode: "steer",
         text: "hi",
         provider: "p",
         model: "m",
@@ -151,10 +170,78 @@ describe("dispatchCommand", () => {
       h,
     );
     expect(h.runner.submit).toHaveBeenCalledWith("hi", {
+      requestId: "submit-2",
+      mode: "steer",
       provider: "p",
       model: "m",
       permission: "read-only",
       images: [{ mediaType: "image/png", data: "AQ==", name: "a.png" }],
     });
+  });
+
+  it("forwards every settings command to the retained coordinator surface", () => {
+    const h = hooks();
+    const mutation: InboundMessage = {
+      kind: "mutateSettings",
+      requestId: "m1",
+      namespace: "locale",
+      expectedRevision: 1,
+      ops: [{ op: "set", path: ["preference"], value: "zh" }],
+    };
+    const setCredential = {
+      kind: "setCredential",
+      requestId: "c1",
+      ref: "DEEPSEEK_API_KEY",
+      value: "fixture-secret",
+    } as const;
+    const unsetCredential = {
+      kind: "unsetCredential",
+      requestId: "c2",
+      ref: "DEEPSEEK_API_KEY",
+    } as const;
+    const copyPreset = {
+      kind: "copyAgentPreset",
+      requestId: "p1",
+      fromPresetId: "standard",
+      presetId: "mine",
+      name: "My Preset",
+    } as const;
+    const deletePreset = {
+      kind: "deleteAgentPreset",
+      requestId: "p2",
+      presetId: "mine",
+    } as const;
+    const readPreset = {
+      kind: "readAgentPreset",
+      requestId: "p3",
+      presetId: "standard",
+    } as const;
+    const resolvePath = {
+      kind: "resolveSettingsPath",
+      requestId: "path1",
+      target: { kind: "settings-document", prepare: true },
+    } as const;
+
+    dispatchCommand(inertCtx, {
+      kind: "getSettingsSection",
+      requestId: "s1",
+      section: "general",
+    }, h);
+    dispatchCommand(inertCtx, mutation, h);
+    dispatchCommand(inertCtx, setCredential, h);
+    dispatchCommand(inertCtx, unsetCredential, h);
+    dispatchCommand(inertCtx, copyPreset, h);
+    dispatchCommand(inertCtx, deletePreset, h);
+    dispatchCommand(inertCtx, readPreset, h);
+    dispatchCommand(inertCtx, resolvePath, h);
+
+    expect(h.runner.getSection).toHaveBeenCalledWith("s1", "general");
+    expect(h.runner.mutate).toHaveBeenCalledWith(mutation);
+    expect(h.runner.setCredential).toHaveBeenCalledWith(setCredential);
+    expect(h.runner.unsetCredential).toHaveBeenCalledWith(unsetCredential);
+    expect(h.runner.copyPreset).toHaveBeenCalledWith(copyPreset);
+    expect(h.runner.deletePreset).toHaveBeenCalledWith(deletePreset);
+    expect(h.runner.readPreset).toHaveBeenCalledWith(readPreset);
+    expect(h.runner.resolvePath).toHaveBeenCalledWith(resolvePath);
   });
 });

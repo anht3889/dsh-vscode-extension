@@ -16,9 +16,16 @@ describe("ProtocolClient", () => {
     const writes: string[] = [];
     stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString()));
 
-    client.send({ kind: "submit", text: "hi" });
+    client.send({
+      kind: "submit",
+      requestId: "submit-1",
+      mode: "queue",
+      text: "hi",
+    });
 
-    expect(writes.join("")).toBe('{"kind":"submit","text":"hi"}\n');
+    expect(writes.join("")).toBe(
+      '{"kind":"submit","requestId":"submit-1","mode":"queue","text":"hi"}\n',
+    );
   });
 
   it("parses stdout ndjson and emits status + event messages", () => {
