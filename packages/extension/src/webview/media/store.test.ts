@@ -157,14 +157,24 @@ describe("reduce", () => {
     ]);
   });
 
-  it("keeps interleaved reasoning independent from assistant text", () => {
-    const thinking = reduce(initialState, reasoningDelta("line one\n"));
-    const streamed = reduce(thinking, textDelta("Hell"));
-    const answered = reduce(streamed, assistantMessage("Hello"));
-    const continued = reduce(answered, reasoningDelta("line two"));
-    expect(continued.timeline).toEqual([
+  it("streams reasoning then collapses it when answer text starts", () => {
+    const thinking = reduce(initialState, reasoningDelta("line one\nline two"));
+    expect(thinking.timeline).toEqual([
       { kind: "thinking", seq: 1, text: "line one\nline two", running: true },
-      { kind: "assistant", seq: 1, text: "Hello", streaming: false },
+    ]);
+    const answered = reduce(thinking, textDelta("Hello"));
+    expect(answered.timeline).toEqual([
+      { kind: "thinking", seq: 1, text: "line one\nline two", running: false },
+      { kind: "assistant", seq: 1, text: "Hello", streaming: true },
+    ]);
+  });
+
+  it("finalizes thinking from assistant/message", () => {
+    const thinking = reduce(initialState, reasoningDelta("analysis"));
+    const answered = reduce(thinking, assistantMessage("answer"));
+    expect(answered.timeline).toEqual([
+      { kind: "thinking", seq: 1, text: "analysis", running: false },
+      { kind: "assistant", seq: 1, text: "answer", streaming: false },
     ]);
   });
 
@@ -180,9 +190,14 @@ describe("reduce", () => {
   });
 
   it("finalizes thinking and assistant text on turn/end", () => {
-    const thinking = reduce(initialState, reasoningDelta("analysis"));
-    const streamed = reduce(thinking, textDelta("answer"));
-    const ended = reduce(streamed, eventMsg("turn/end", { turn: 1 }));
+    const running: UiState = {
+      ...initialState,
+      timeline: [
+        { kind: "thinking", seq: 1, text: "analysis", running: true },
+        { kind: "assistant", seq: 1, text: "answer", streaming: true },
+      ],
+    };
+    const ended = reduce(running, eventMsg("turn/end", { turn: 1 }));
     expect(ended.timeline).toEqual([
       { kind: "thinking", seq: 1, text: "analysis", running: false },
       { kind: "assistant", seq: 1, text: "answer", streaming: false },
@@ -246,7 +261,6 @@ describe("reduce", () => {
   it("folds turn/start identically for live events and history", () => {
     const events = [
       reasoningDelta("analysis").event,
-      textDelta("cut off").event,
       eventMsg("turn/start", { turn: 2 }).event,
     ];
     const live = events.reduce(
@@ -260,8 +274,7 @@ describe("reduce", () => {
       events,
     });
     expect(live.timeline).toEqual([
-      { kind: "thinking", seq: 1, text: "analysis", running: true },
-      { kind: "assistant", seq: 1, text: "cut off", streaming: false },
+      { kind: "thinking", seq: 1, text: "analysis", running: false },
     ]);
     expect(replayed.timeline).toEqual(live.timeline);
   });

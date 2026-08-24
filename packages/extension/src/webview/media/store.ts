@@ -650,21 +650,22 @@ export function foldEvent(
         ];
       }
       if (type !== "text-delta") return rows;
+      const nextRows = closeThinking(rows);
       const index = lastRowIndex(
-        rows,
+        nextRows,
         (row) => row.kind === "assistant" && row.streaming,
       );
       if (index >= 0) {
-        const row = rows[index]!;
-        if (row.kind !== "assistant") return rows;
+        const row = nextRows[index]!;
+        if (row.kind !== "assistant") return nextRows;
         return [
-          ...rows.slice(0, index),
+          ...nextRows.slice(0, index),
           { ...row, text: row.text + text },
-          ...rows.slice(index + 1),
+          ...nextRows.slice(index + 1),
         ];
       }
       return [
-        ...rows,
+        ...nextRows,
         { kind: "assistant", seq: event.seq, text, streaming: true },
       ];
     }
@@ -676,28 +677,28 @@ export function foldEvent(
           ? (message as { content?: unknown }).content
           : undefined;
       const text = messageText(content);
+      let nextRows = closeThinking(rows);
       const index = lastRowIndex(
-        rows,
+        nextRows,
         (row) => row.kind === "assistant" && row.streaming,
       );
-      let nextRows = rows;
       if (index >= 0) {
-        const row = rows[index]!;
-        if (row.kind !== "assistant") return rows;
+        const row = nextRows[index]!;
+        if (row.kind !== "assistant") return nextRows;
         // The assembled message is authoritative over the accumulated deltas,
         // except when it holds no text at all (tool-call-only steps).
         nextRows = [
-          ...rows.slice(0, index),
+          ...nextRows.slice(0, index),
           {
             ...row,
             text: text === "" ? row.text : text,
             streaming: false,
           },
-          ...rows.slice(index + 1),
+          ...nextRows.slice(index + 1),
         ];
       } else if (text !== "") {
         nextRows = [
-          ...rows,
+          ...nextRows,
           { kind: "assistant", seq: event.seq, text, streaming: false },
         ];
       }
@@ -767,7 +768,7 @@ export function foldEvent(
       return closeThinking(rows);
 
     case "turn/start":
-      return closeAssistantStreaming(rows);
+      return closeThinking(closeAssistantStreaming(rows));
 
     case "turn/end":
       return closeThinking(closeAssistantStreaming(rows));
