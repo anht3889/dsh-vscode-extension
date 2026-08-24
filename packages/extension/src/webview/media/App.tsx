@@ -390,7 +390,7 @@ export function App(): JSX.Element {
           const detail =
             "detail" in data && typeof data.detail === "string"
               ? data.detail
-              : "DSH disconnected";
+              : "DeepSeek Harness disconnected";
           settingsDispatch({ kind: "settingsDisconnected", detail });
         } else if (data.kind === "ready") {
           settingsDispatch({ kind: "settingsConnected" });

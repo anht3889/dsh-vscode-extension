@@ -118,7 +118,7 @@ describe.each([
     expect(screen.getByText("OAUTH_CLIENT_SECRET").parentElement).toHaveTextContent(
       locale === "en" ? "Configured" : "已配置",
     );
-    expect(screen.getByText(/DSH Web/)).toBeVisible();
+    expect(screen.getByText(/DeepSeek Harness Web/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /Authorize|授权|Discover|发现/ })).toBeNull();
     expect(screen.queryByText(/No log entries|暂无日志条目/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Logs|日志/ }));
@@ -145,10 +145,10 @@ it("renders unavailable secret reporting as degraded copy", () => {
   expect(screen.getByText(/cannot report configured secret state/i)).toBeVisible();
 });
 
-it("offers Authorize for loopback OAuth and omits the DSH Web note", () => {
+it("offers Authorize for loopback OAuth and omits the DeepSeek Harness Web note", () => {
   const { controller, sent } = setup("en", detail, "available");
 
-  expect(screen.queryByText(/DSH Web/)).toBeNull();
+  expect(screen.queryByText(/DeepSeek Harness Web/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Authorize" }));
   expect(sent.at(-1)).toMatchObject({
     kind: "runMcpOperation",
@@ -157,10 +157,10 @@ it("offers Authorize for loopback OAuth and omits the DSH Web note", () => {
   expect(controller.snapshot().authorizing).toBe(true);
 });
 
-it("keeps the DSH Web note and hides Authorize for manual OAuth", () => {
+it("keeps the DeepSeek Harness Web note and hides Authorize for manual OAuth", () => {
   setup();
 
-  expect(screen.getByText(/DSH Web/)).toBeVisible();
+  expect(screen.getByText(/DeepSeek Harness Web/)).toBeVisible();
   expect(screen.queryByRole("button", { name: "Authorize" })).toBeNull();
 });
 

@@ -43,7 +43,7 @@ export function StreamView({
         <article
           className={`dsh-turn dsh-turn-${entry.role}`}
           key={`t-${i}`}
-          aria-label={entry.role === "user" ? "You" : "DSH"}
+          aria-label={entry.role === "user" ? "You" : "DeepSeek Harness"}
         >
           {entry.role === "assistant" ? (
             <Markdown source={entry.text} />

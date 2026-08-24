@@ -352,7 +352,7 @@ describe("OAuth authorization", () => {
       "aria-invalid",
       "true",
     );
-    expect(screen.getByText(/must be completed in DSH Web/)).toBeVisible();
+    expect(screen.getByText(/must be completed in DeepSeek Harness Web/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 

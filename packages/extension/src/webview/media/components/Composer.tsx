@@ -237,7 +237,7 @@ export function Composer({
         aria-label={settingsText(locale, "composerMessage")}
         rows={3}
         value={draft}
-        placeholder="Message DSH…"
+        placeholder="Message DeepSeek Harness…"
         role={slashPicker === undefined ? undefined : "combobox"}
         aria-expanded={slashPicker === undefined ? undefined : true}
         aria-controls={

@@ -498,7 +498,7 @@ function renderReady(): HTMLTextAreaElement {
     },
     context: { used: 0, window: 128_000 },
   });
-  return screen.getByPlaceholderText("Message DSH…") as HTMLTextAreaElement;
+  return screen.getByPlaceholderText("Message DeepSeek Harness…") as HTMLTextAreaElement;
 }
 
 function commands(kind: UiCommand["cmd"]["kind"]): UiCommand["cmd"][] {
@@ -936,7 +936,7 @@ describe("App slash flow", () => {
     expect(screen.getByRole("option", { name: /\/brainstorming/ })).toBeVisible();
 
     const input = screen.getByPlaceholderText(
-      "Message DSH…",
+      "Message DeepSeek Harness…",
     ) as HTMLTextAreaElement;
     // Earlier picker mousedown tests leave React's select plugin armed.
     fireEvent.mouseUp(input);
@@ -973,7 +973,7 @@ describe("App settings shell", () => {
       screen.queryByText("Extension settings are not available in this version yet."),
     ).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("DSH binary path"), {
+    fireEvent.change(screen.getByLabelText("DeepSeek Harness binary path"), {
       target: { value: "/opt/dsh" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -991,13 +991,13 @@ describe("App settings shell", () => {
         restartRequired: true,
       },
     });
-    expect(screen.getByText("Restart DSH to apply all changes.")).toBeVisible();
+    expect(screen.getByText("Restart DeepSeek Harness to apply all changes.")).toBeVisible();
 
     host({ kind: "status", state: "thinking", detail: "arbitrary detail" });
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeDisabled();
     host({ kind: "status", state: "idle", detail: "still arbitrary" });
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Restart DSH" }));
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Restart DeepSeek Harness" }));
     const restart = commands("restartDsh")[0];
     if (restart?.kind !== "restartDsh") throw new Error("expected restart");
     host({
@@ -1008,7 +1008,7 @@ describe("App settings shell", () => {
     });
     expect(commands("getExtensionSettings")).toHaveLength(2);
     expect(
-      screen.queryByText("Restart DSH to apply all changes."),
+      screen.queryByText("Restart DeepSeek Harness to apply all changes."),
     ).not.toBeInTheDocument();
   });
 
@@ -1029,7 +1029,7 @@ describe("App settings shell", () => {
     });
     host({ kind: "hostDisconnected", detail: "child exited" });
 
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeEnabled();
     expect(screen.getByLabelText("Extension")).toBeVisible();
   });
 
@@ -1048,7 +1048,7 @@ describe("App settings shell", () => {
         settings: { binaryPath: "", handshakeTimeoutMs: 30_000 },
       },
     });
-    fireEvent.change(screen.getByLabelText("DSH binary path"), {
+    fireEvent.change(screen.getByLabelText("DeepSeek Harness binary path"), {
       target: { value: "/draft/dsh" },
     });
 
@@ -1065,7 +1065,7 @@ describe("App settings shell", () => {
       fireEvent.click(within(expectConfirmation()).getByRole("button", {
         name: "Cancel",
       }));
-      expect(screen.getByLabelText("DSH binary path")).toHaveValue("/draft/dsh");
+      expect(screen.getByLabelText("DeepSeek Harness binary path")).toHaveValue("/draft/dsh");
       expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
     };
 
@@ -1084,7 +1084,7 @@ describe("App settings shell", () => {
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("button", { name: "Extension" }));
-    expect(screen.getByLabelText("DSH binary path")).toHaveValue("");
+    expect(screen.getByLabelText("DeepSeek Harness binary path")).toHaveValue("");
   });
 
   it("discards staged drafts across every persistent settings controller", () => {
@@ -1145,7 +1145,7 @@ describe("App settings shell", () => {
         settings: { binaryPath: "", handshakeTimeoutMs: 30_000 },
       },
     });
-    fireEvent.change(screen.getByLabelText("DSH binary path"), {
+    fireEvent.change(screen.getByLabelText("DeepSeek Harness binary path"), {
       target: { value: "/draft/dsh" },
     });
 
@@ -1166,7 +1166,7 @@ describe("App settings shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("button", { name: "Extension" }));
-    expect(screen.getByLabelText("DSH binary path")).toHaveValue("");
+    expect(screen.getByLabelText("DeepSeek Harness binary path")).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "Models" }));
     expect(screen.getByLabelText("Base URL")).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "Plugins" }));
@@ -1213,7 +1213,7 @@ describe("App settings shell", () => {
         },
       },
     });
-    expect(screen.getByText("Restart DSH to apply all changes.")).toBeVisible();
+    expect(screen.getByText("Restart DeepSeek Harness to apply all changes.")).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "Models" }));
     const modelsRead = commands("getSettingsSection").find((command) =>
@@ -1235,7 +1235,7 @@ describe("App settings shell", () => {
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    expect(screen.getByText("Restart DSH to apply all changes.")).toBeVisible();
+    expect(screen.getByText("Restart DeepSeek Harness to apply all changes.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Models" }));
     expect(screen.getByLabelText("Base URL")).toHaveValue("");
 
@@ -1253,7 +1253,7 @@ describe("App settings shell", () => {
         settings: { binaryPath: "", handshakeTimeoutMs: 30_000 },
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Restart DSH" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart DeepSeek Harness" }));
     const restart = commands("restartDsh")[0];
     if (restart?.kind !== "restartDsh") throw new Error("expected restart");
     host({
@@ -1263,7 +1263,7 @@ describe("App settings shell", () => {
       result: { ok: true },
     });
     expect(
-      screen.queryByText("Restart DSH to apply all changes."),
+      screen.queryByText("Restart DeepSeek Harness to apply all changes."),
     ).not.toBeInTheDocument();
   });
 
@@ -1804,7 +1804,7 @@ describe("App settings shell", () => {
       text: "composer stays",
     });
     fireEvent.click(screen.getByRole("button", { name: "Extension" }));
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(commands("confirmNewChat")).toHaveLength(1);
     expect(commands("newSession")).toHaveLength(0);
@@ -1818,7 +1818,7 @@ describe("App settings shell", () => {
         options: [{ label: "Yes" }],
       }],
     });
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
 
@@ -2317,7 +2317,7 @@ describe("App settings shell", () => {
       },
     });
 
-    expect(screen.getByText("Restart DSH to apply all changes.")).toBeVisible();
+    expect(screen.getByText("Restart DeepSeek Harness to apply all changes.")).toBeVisible();
     expect(screen.getByLabelText("Timeout (ms)")).toHaveValue(20_000);
   });
 

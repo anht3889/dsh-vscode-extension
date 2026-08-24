@@ -1074,7 +1074,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       if (msg.state === "error") {
         return {
           ...state,
-          error: msg.detail ?? "DSH reported an error",
+          error: msg.detail ?? "DeepSeek Harness reported an error",
           starting: false,
           status: "error",
           ...(msg.code === "command-rejected"

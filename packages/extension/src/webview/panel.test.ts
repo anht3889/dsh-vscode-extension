@@ -557,7 +557,7 @@ describe("extension settings host routing", () => {
       kind: "settingsHostResult",
       requestId: "home-action",
       action: "revealDshHome",
-      result: { ok: false, detail: "DSH stopped" },
+      result: { ok: false, detail: "DeepSeek Harness stopped" },
     });
     deliver(provider, {
       kind: "settingsPath",
@@ -661,7 +661,7 @@ describe("extension settings host routing", () => {
   });
 });
 
-describe("safe DSH restart", () => {
+describe("safe DeepSeek Harness restart", () => {
   it("stops the owned child, resumes the captured session, and ignores its late exit", async () => {
     const host = settingsHost();
     const oldChild = child();
@@ -763,7 +763,7 @@ describe("safe DSH restart", () => {
       kind: "settingsHostResult",
       requestId: "restart-3",
       action: "restart",
-      result: { ok: false, detail: "DSH is busy" },
+      result: { ok: false, detail: "DeepSeek Harness is busy" },
     }));
     expect(pm.start).not.toHaveBeenCalled();
   });
@@ -799,7 +799,7 @@ describe("safe DSH restart", () => {
       action: "restart",
       result: {
         ok: false,
-        detail: "DSH restart cancelled: stop requested",
+        detail: "DeepSeek Harness restart cancelled: stop requested",
       },
     });
     next.resolve({
@@ -845,7 +845,7 @@ describe("safe DSH restart", () => {
       action: "restart",
       result: {
         ok: false,
-        detail: "DSH restart cancelled: provider disposed",
+        detail: "DeepSeek Harness restart cancelled: provider disposed",
       },
     });
     next.resolve({
@@ -905,7 +905,7 @@ describe("safe DSH restart", () => {
       action: "restart",
       result: {
         ok: false,
-        detail: "DSH restart cancelled: superseded by another restart",
+        detail: "DeepSeek Harness restart cancelled: superseded by another restart",
       },
     });
     expect(postMessage).toHaveBeenCalledWith({
@@ -966,7 +966,7 @@ describe("safe DSH restart", () => {
       action: "restart",
       result: {
         ok: false,
-        detail: "DSH restart cancelled: workspace folder changed",
+        detail: "DeepSeek Harness restart cancelled: workspace folder changed",
       },
     });
     expect(pm.start).toHaveBeenCalledWith("/new");

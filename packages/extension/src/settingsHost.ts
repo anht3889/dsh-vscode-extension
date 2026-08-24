@@ -47,7 +47,7 @@ function sourceFor(
 
 function validate(view: ExtensionSettingsView): void {
   if (typeof view.binaryPath !== "string") {
-    throw new TypeError("DSH binary path must be a string");
+    throw new TypeError("DeepSeek Harness binary path must be a string");
   }
   if (
     !Number.isInteger(view.handshakeTimeoutMs) ||
@@ -55,7 +55,7 @@ function validate(view: ExtensionSettingsView): void {
     view.handshakeTimeoutMs > 300_000
   ) {
     throw new RangeError(
-      "DSH handshake timeout must be a whole number from 1000 to 300000",
+      "DeepSeek Harness handshake timeout must be a whole number from 1000 to 300000",
     );
   }
 }

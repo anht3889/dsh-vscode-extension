@@ -64,12 +64,12 @@ export function Header({
   return (
     <header className="dsh-header">
       <div className="dsh-title">
-        <span>DSH: Chat</span>
+        <span>DeepSeek Harness</span>
         {busy ? (
           <span
             className="dsh-spinner"
             role="status"
-            aria-label="DSH is working"
+            aria-label="DeepSeek Harness is working"
           />
         ) : null}
       </div>

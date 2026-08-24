@@ -118,7 +118,7 @@ export class ProcessManager {
         settled = true;
         const err = new Error(
           `${binary} did not report itself ready within ${handshakeMs}ms. ` +
-            `Run "DSH: Start" to retry, or raise dsh.handshakeTimeoutMs.`,
+            `Run "DeepSeek Harness: Start" to retry, or raise dsh.handshakeTimeoutMs.`,
         );
         this.options.onError?.(folder, err);
         child.kill("SIGTERM");

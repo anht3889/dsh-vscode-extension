@@ -57,7 +57,7 @@ describe("ExtensionSection", () => {
       },
     });
 
-    fireEvent.change(screen.getByLabelText("DSH binary path"), {
+    fireEvent.change(screen.getByLabelText("DeepSeek Harness binary path"), {
       target: { value: "/opt/dsh" },
     });
     fireEvent.change(screen.getByLabelText("Handshake timeout (ms)"), {
@@ -149,9 +149,9 @@ describe("ExtensionSection", () => {
     );
     expect(screen.getByText("Extension action in progress…")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Open DSH settings document" }),
+      screen.getByRole("button", { name: "Open DeepSeek Harness settings document" }),
     ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Reveal DSH home" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reveal DeepSeek Harness home" })).toBeDisabled();
     receive(controller, {
       kind: "settingsHostResult",
       requestId: "request-2",
@@ -160,7 +160,7 @@ describe("ExtensionSection", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Open DSH settings document" }),
+      screen.getByRole("button", { name: "Open DeepSeek Harness settings document" }),
     );
     receive(controller, {
       kind: "settingsHostResult",
@@ -168,7 +168,7 @@ describe("ExtensionSection", () => {
       action: "openSettingsDocument",
       result: { ok: true },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Reveal DSH home" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reveal DeepSeek Harness home" }));
     expect(sent.slice(1)).toEqual([
       { kind: "openExtensionSettings", requestId: "request-2" },
       { kind: "openSettingsDocument", requestId: "request-3" },
@@ -180,7 +180,7 @@ describe("ExtensionSection", () => {
       action: "revealDshHome",
       result: { ok: true },
     });
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeDisabled();
 
     rerender(
       <ExtensionSection
@@ -189,12 +189,12 @@ describe("ExtensionSection", () => {
         restartDisabled={false}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Restart DSH" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart DeepSeek Harness" }));
     expect(sent.at(-1)).toEqual({
       kind: "restartDsh",
       requestId: "request-5",
     });
-    expect(screen.getByRole("button", { name: "Restart DSH" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restart DeepSeek Harness" })).toBeDisabled();
   });
 
   it("offers a correlated Retry after an Extension read error", () => {

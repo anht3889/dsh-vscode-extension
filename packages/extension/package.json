@@ -1,7 +1,7 @@
 {
   "name": "dsh",
-  "displayName": "DSH",
-  "description": "DSH (DeepSeek Harness) control plane for VS Code — an AI coding agent chat sidecar.",
+  "displayName": "DeepSeek Harness",
+  "description": "DeepSeek Harness control plane for VS Code — an AI coding agent chat sidecar.",
   "version": "0.1.0",
   "publisher": "dsh",
   "license": "MIT",
@@ -25,20 +25,20 @@
     "commands": [
       {
         "command": "dsh.start",
-        "title": "DSH: Start",
-        "category": "DSH"
+        "title": "Start",
+        "category": "DeepSeek Harness"
       },
       {
         "command": "dsh.stop",
-        "title": "DSH: Stop",
-        "category": "DSH"
+        "title": "Stop",
+        "category": "DeepSeek Harness"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "dsh",
-          "title": "DSH",
+          "title": "DeepSeek Harness",
           "icon": "resources/dsh.svg"
         }
       ]
@@ -53,12 +53,12 @@
       ]
     },
     "configuration": {
-      "title": "DSH",
+      "title": "DeepSeek Harness",
       "properties": {
         "dsh.binaryPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the dsh binary. When empty, DSH probes nvm and common Homebrew locations before falling back to the extension host PATH."
+          "description": "Path to the dsh binary. When empty, DeepSeek Harness probes nvm and common Homebrew locations before falling back to the extension host PATH."
         },
         "dsh.handshakeTimeoutMs": {
           "type": "number",

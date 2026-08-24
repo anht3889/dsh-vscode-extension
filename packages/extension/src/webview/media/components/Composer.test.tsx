@@ -133,7 +133,7 @@ describe("Composer send gating", () => {
   it("maps idle and busy keyboard gestures to queue and steer", () => {
     const onSubmit = vi.fn();
     const { rerender } = renderComposer({ draft: "hello", onSubmit });
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onSubmit).toHaveBeenLastCalledWith("queue");
 
@@ -193,7 +193,7 @@ describe("Composer attach button", () => {
   it("opens the picker at the caret the user placed", () => {
     const onOpenPicker = vi.fn();
     renderComposer({ draft: "review this", onOpenPicker });
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
     (input as HTMLTextAreaElement).setSelectionRange(6, 6);
     fireEvent.select(input);
     fireEvent.click(
@@ -208,7 +208,7 @@ describe("Composer attach button", () => {
     expect(
       screen.getByRole("button", { name: "Attach files, folders, or images" }),
     ).toBeDisabled();
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
     expect(input).toBeEnabled();
     fireEvent.change(input, { target: { value: "draft before ready" } });
     expect(onDraftChange).toHaveBeenCalledWith("draft before ready", 18);
@@ -246,7 +246,7 @@ describe("Composer slash keyboard arbitration", () => {
   it("reports textarea caret selections to App arbitration", () => {
     const onCaretChange = vi.fn();
     renderComposer({ draft: "/help later", onCaretChange });
-    const input = screen.getByPlaceholderText("Message DSH…") as HTMLTextAreaElement;
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…") as HTMLTextAreaElement;
     input.setSelectionRange(2, 2);
 
     fireEvent.select(input);
@@ -305,7 +305,7 @@ describe("Composer slash keyboard arbitration", () => {
     });
 
     fireEvent.pointerDown(screen.getByRole("option", { name: /\/help/ }));
-    fireEvent.pointerDown(screen.getByPlaceholderText("Message DSH…"));
+    fireEvent.pointerDown(screen.getByPlaceholderText("Message DeepSeek Harness…"));
     fireEvent.pointerDown(screen.getByRole("button", { name: "Send message" }));
     expect(onDismissPicker).not.toHaveBeenCalled();
   });
@@ -316,7 +316,7 @@ describe("Composer slash keyboard arbitration", () => {
       picker: slashPicker,
       onPickSlashItem: () => 6,
     });
-    const input = screen.getByPlaceholderText("Message DSH…") as HTMLTextAreaElement;
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…") as HTMLTextAreaElement;
 
     fireEvent.mouseDown(screen.getByRole("option", { name: /\/help/ }));
 
@@ -334,7 +334,7 @@ describe("Composer slash keyboard arbitration", () => {
       picker: slashPicker,
       onMoveSlashHighlight,
     });
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
 
     expect(fireEvent.keyDown(input, { key })).toBe(false);
     expect(onMoveSlashHighlight).toHaveBeenCalledWith(delta);
@@ -351,7 +351,7 @@ describe("Composer slash keyboard arbitration", () => {
     });
 
     expect(
-      fireEvent.keyDown(screen.getByPlaceholderText("Message DSH…"), {
+      fireEvent.keyDown(screen.getByPlaceholderText("Message DeepSeek Harness…"), {
         key: "Enter",
       }),
     ).toBe(false);
@@ -369,7 +369,7 @@ describe("Composer slash keyboard arbitration", () => {
       onPickSlashItem,
     });
 
-    fireEvent.keyDown(screen.getByPlaceholderText("Message DSH…"), {
+    fireEvent.keyDown(screen.getByPlaceholderText("Message DeepSeek Harness…"), {
       key: "Enter",
     });
     expect(onSubmit).toHaveBeenCalledOnce();
@@ -387,7 +387,7 @@ describe("Composer slash keyboard arbitration", () => {
     });
 
     expect(
-      fireEvent.keyDown(screen.getByPlaceholderText("Message DSH…"), {
+      fireEvent.keyDown(screen.getByPlaceholderText("Message DeepSeek Harness…"), {
         key: "Enter",
         shiftKey: true,
       }),
@@ -405,7 +405,7 @@ describe("Composer slash keyboard arbitration", () => {
     });
 
     expect(
-      fireEvent.keyDown(screen.getByPlaceholderText("Message DSH…"), {
+      fireEvent.keyDown(screen.getByPlaceholderText("Message DeepSeek Harness…"), {
         key: "Escape",
       }),
     ).toBe(false);
@@ -423,7 +423,7 @@ describe("Composer slash keyboard arbitration", () => {
       onPickSlashItem,
       onSubmit,
     });
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
     const event = new KeyboardEvent("keydown", {
       key: "Enter",
       bubbles: true,
@@ -446,7 +446,7 @@ describe("Composer slash keyboard arbitration", () => {
       onSubmit,
       onMoveSlashHighlight,
     });
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
 
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -459,7 +459,7 @@ describe("Composer slash accessibility", () => {
   it("connects the textarea combobox to the highlighted slash option", () => {
     renderComposer({ draft: "/", picker: slashPicker });
 
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
     expect(input).toHaveAttribute("role", "combobox");
     expect(input).toHaveAttribute("aria-expanded", "true");
     expect(input).toHaveAttribute("aria-controls", "dsh-slash-listbox");
@@ -475,7 +475,7 @@ describe("Composer slash accessibility", () => {
   it("does not expose combobox metadata for an attachment picker", () => {
     renderComposer({ draft: "read @", picker: openPicker });
 
-    const input = screen.getByPlaceholderText("Message DSH…");
+    const input = screen.getByPlaceholderText("Message DeepSeek Harness…");
     expect(input).not.toHaveAttribute("role");
     expect(input).not.toHaveAttribute("aria-expanded");
     expect(input).not.toHaveAttribute("aria-controls");
@@ -489,7 +489,7 @@ describe("Composer slash accessibility", () => {
     });
 
     expect(screen.getByText("Describe what should be reviewed")).toBeVisible();
-    expect(screen.getByPlaceholderText("Message DSH…")).toHaveValue(
+    expect(screen.getByPlaceholderText("Message DeepSeek Harness…")).toHaveValue(
       "/review src",
     );
   });

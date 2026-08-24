@@ -86,7 +86,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   dispose(): void {
-    this.cancelPendingRestart("DSH restart cancelled: provider disposed");
+    this.cancelPendingRestart("DeepSeek Harness restart cancelled: provider disposed");
     this.startGeneration += 1;
     this.startingChild = false;
     this.invalidateHostWork("Extension host disposed");
@@ -359,7 +359,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.view?.webview.postMessage({
         kind: "status",
         state: "error",
-        detail: "No workspace folder open. Open a folder first, then run DSH: Start.",
+        detail: "No workspace folder open. Open a folder first, then run DeepSeek Harness: Start.",
       });
       return;
     }
@@ -368,7 +368,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.pendingRestart.folder !== folder
     ) {
       this.cancelPendingRestart(
-        "DSH restart cancelled: workspace folder changed",
+        "DeepSeek Harness restart cancelled: workspace folder changed",
       );
       this.startGeneration += 1;
       this.startingChild = false;
@@ -406,7 +406,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
         }
         if (!wasCurrent) return;
         this.status = "error";
-        this.invalidateHostWork("DSH disconnected");
+        this.invalidateHostWork("DeepSeek Harness disconnected");
         const detail =
           code !== null
             ? `dsh process exited with code ${code}`
@@ -428,14 +428,14 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   }
 
   async stop(): Promise<void> {
-    this.cancelPendingRestart("DSH restart cancelled: stop requested");
+    this.cancelPendingRestart("DeepSeek Harness restart cancelled: stop requested");
     this.startGeneration += 1;
     this.startingChild = false;
     const running = this.running;
     this.running = undefined;
     this.currentSessionId = undefined;
     this.fullAccessConfirmedFor = undefined;
-    this.invalidateHostWork("DSH stopped");
+    this.invalidateHostWork("DeepSeek Harness stopped");
     if (running) await running.stop();
   }
 
@@ -535,7 +535,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     mode: PendingTrustedPath["mode"],
   ): void {
     if (!this.running) {
-      this.postHostFailure(uiRequestId, action, new Error("DSH is disconnected"));
+      this.postHostFailure(uiRequestId, action, new Error("DeepSeek Harness is disconnected"));
       return;
     }
     const requestId = crypto.randomUUID();
@@ -652,7 +652,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   private async restart(requestId: string): Promise<void> {
     if (this.pendingRestart !== undefined) {
       this.cancelPendingRestart(
-        "DSH restart cancelled: superseded by another restart",
+        "DeepSeek Harness restart cancelled: superseded by another restart",
       );
       this.startingChild = false;
     }
@@ -661,7 +661,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.status === "thinking" ||
       this.status === "awaiting-approval"
     ) {
-      this.postHostFailure(requestId, "restart", new Error("DSH is busy"));
+      this.postHostFailure(requestId, "restart", new Error("DeepSeek Harness is busy"));
       return;
     }
     const folder =
@@ -680,7 +680,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     this.startingChild = true;
     const old = this.running;
     this.running = undefined;
-    this.invalidateHostWork("DSH restarted");
+    this.invalidateHostWork("DeepSeek Harness restarted");
     const hostGeneration = this.hostGeneration;
     const pending: PendingRestart = {
       requestId,
@@ -712,7 +712,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
         }
         this.running = undefined;
         this.status = "error";
-        this.invalidateHostWork("DSH disconnected");
+        this.invalidateHostWork("DeepSeek Harness disconnected");
         const detail =
           code !== null
             ? `dsh process exited with code ${code}`
@@ -864,7 +864,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${styleUri}" />
 </head>
 <body>
-  <div id="root"><p class="dsh-boot">Loading DSH\u2026</p></div>
+  <div id="root"><p class="dsh-boot">Loading DeepSeek Harness\u2026</p></div>
   <script nonce="${nonce}">
     // Capture phase: resource load failures fire on the element and do not bubble.
     window.addEventListener("error", function (event) {
@@ -875,7 +875,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
         target && target.tagName === "SCRIPT"
           ? "could not load " + (target.src || "the webview bundle")
           : event.message || String(event.error || "unknown error");
-      root.textContent = "DSH webview failed to start: " + detail;
+      root.textContent = "DeepSeek Harness webview failed to start: " + detail;
     }, true);
   </script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
