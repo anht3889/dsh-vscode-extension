@@ -790,28 +790,95 @@ body,
   padding: 4px;
 }
 
-.dsh-toolcard {
+.dsh-think,
+.dsh-tool-row,
+.dsh-command-row {
   border: 1px solid var(--dsh-border);
-  border-radius: 3px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
-.dsh-toolcard-toggle {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  background: transparent;
-  border: none;
-  color: var(--dsh-fg);
-  padding: 4px 8px;
-  cursor: pointer;
-  font-family: monospace;
+.dsh-think {
+  color: var(--dsh-muted);
 }
 
-.dsh-toolcard-path {
+.dsh-row-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  color: var(--dsh-fg);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.dsh-row-toggle:hover {
+  background: var(--dsh-hover);
+}
+
+.dsh-row-heading {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dsh-row-title,
+.dsh-row-summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dsh-row-title {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.dsh-row-summary,
+.dsh-row-status {
+  color: var(--dsh-muted);
+  font-size: 11px;
+}
+
+.dsh-think > .dsh-row-summary {
+  padding: 0 8px 7px;
+  white-space: pre-wrap;
+}
+
+.dsh-row-status,
+.dsh-row-caret {
+  flex: none;
+}
+
+.dsh-row-status-error,
+.dsh-row-status-stopped {
+  color: var(--dsh-danger);
+}
+
+.dsh-row-details {
+  border-top: 1px solid var(--dsh-border);
+}
+
+.dsh-row-raw,
+.dsh-row-result {
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  color: var(--dsh-fg);
+  background: var(--vscode-textCodeBlock-background, var(--dsh-input));
+  font-family: var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dsh-row-result {
+  border-top: 1px solid var(--dsh-border);
 }
 
 .dsh-diff {

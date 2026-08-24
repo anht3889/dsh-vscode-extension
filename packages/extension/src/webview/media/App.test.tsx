@@ -658,8 +658,10 @@ describe("App slash flow", () => {
         },
       },
     });
-    expect(screen.getAllByLabelText("You")).toHaveLength(1);
-    expect(screen.getByLabelText("You")).toHaveTextContent("/goal write tests");
+    expect(screen.queryByLabelText("You")).toBeNull();
+    expect(screen.getByRole("button", { name: "Command" })).toHaveTextContent(
+      "/goal write tests",
+    );
     expect(input).toHaveValue("");
 
     postMessage.mockClear();

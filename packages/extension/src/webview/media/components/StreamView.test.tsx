@@ -88,18 +88,59 @@ describe("StreamView", () => {
     expect(onApply).toHaveBeenCalled();
   });
 
-  it("does not render thinking rows yet", () => {
+  it("renders thinking, assistant, tool, and command rows in array order", () => {
     render(
       <StreamView
         timeline={[
-          { kind: "thinking", seq: 1, text: "private reasoning", running: true },
-          assistant("visible answer"),
+          { kind: "thinking", seq: 1, text: "reasoning", running: false },
+          { kind: "assistant", seq: 2, text: "answer", streaming: false },
+          {
+            kind: "tool",
+            seq: 3,
+            callId: "call-1",
+            name: "read",
+            argsRaw: "{\"path\":\"/a.ts\"}",
+            status: "stopped",
+            diffs: [],
+          },
+          {
+            kind: "command",
+            seq: 4,
+            commandId: "command-1",
+            name: "goal",
+            args: "write tests",
+            status: "running",
+          },
         ]}
         diffs={[]}
         onApply={vi.fn()}
       />,
     );
-    expect(screen.queryByText("private reasoning")).toBeNull();
-    expect(screen.getByText("visible answer")).toBeVisible();
+    const stream = screen.getByRole("main");
+    const labels = Array.from(stream.children).map(
+      (element) => element.getAttribute("aria-label"),
+    );
+    expect(labels).toEqual(["Think", "DeepSeek Harness", "read", "Command"]);
+  });
+
+  it("does not show Apply all for row-local diffs alone", () => {
+    render(
+      <StreamView
+        timeline={[
+          {
+            kind: "tool",
+            seq: 1,
+            callId: "call-1",
+            name: "edit",
+            argsRaw: "{}",
+            status: "ok",
+            diffs: [{ path: "/a.ts", oldText: "a", newText: "b" }],
+          },
+        ]}
+        diffs={[]}
+        onApply={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Apply all diffs" })).toBeNull();
   });
 });
