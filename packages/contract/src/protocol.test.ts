@@ -425,3 +425,38 @@ describe("protocol v6", () => {
     })).toBe(true);
   });
 });
+
+describe("session event view", () => {
+  const base = { type: "tool/call", seq: 1, time: 0, data: { callId: "c1", name: "bash", arguments: "{}" } };
+
+  it("accepts an event without view", () => {
+    expect(isOutboundMessage({ kind: "event", sessionId: "s1", event: base })).toBe(true);
+  });
+
+  it("accepts a call view", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: {
+        ...base,
+        view: { for: "call", view: { card: "generic", title: "Run bash" } },
+      },
+    })).toBe(true);
+  });
+
+  it("rejects an unknown view.for", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: { ...base, view: { for: "other", view: { card: "generic", title: "x" } } },
+    })).toBe(false);
+  });
+
+  it("rejects a malformed history event view", () => {
+    expect(isOutboundMessage({
+      kind: "history",
+      sessionId: "s1",
+      events: [{ ...base, view: { for: "call" } }],
+    })).toBe(false);
+  });
+});

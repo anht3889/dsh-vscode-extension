@@ -233,6 +233,228 @@ function isSlashAvailability(v: unknown): v is SlashAvailability {
   return typeof o.commands === "boolean" && typeof o.skills === "boolean";
 }
 
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isFileLocation(v: unknown): v is import("./events.js").FileLocation {
+  if (!isPlainObject(v)) return false;
+  if (typeof v.path !== "string") return false;
+  if (v.line !== undefined && typeof v.line !== "number") return false;
+  return true;
+}
+
+function isFileDiff(v: unknown): v is import("./events.js").FileDiff {
+  if (!isPlainObject(v)) return false;
+  if (typeof v.path !== "string") return false;
+  if (v.oldText !== null && typeof v.oldText !== "string") return false;
+  if (typeof v.newText !== "string") return false;
+  return true;
+}
+
+function isToolCallKind(v: unknown): v is import("./events.js").ToolCallKind {
+  return v === "read" || v === "edit" || v === "delete" || v === "move"
+    || v === "search" || v === "execute" || v === "fetch" || v === "other";
+}
+
+function isGenericCallView(v: unknown): v is import("./events.js").GenericCallView {
+  if (!isPlainObject(v) || v.card !== "generic") return false;
+  if (typeof v.title !== "string") return false;
+  if (v.kind !== undefined && !isToolCallKind(v.kind)) return false;
+  if (v.locations !== undefined) {
+    if (!Array.isArray(v.locations) || !v.locations.every(isFileLocation)) return false;
+  }
+  return true;
+}
+
+function isTerminalCallView(v: unknown): v is import("./events.js").TerminalCallView {
+  if (!isPlainObject(v) || v.card !== "terminal") return false;
+  if (typeof v.title !== "string") return false;
+  if (v.description !== undefined && typeof v.description !== "string") return false;
+  if (v.cwd !== undefined && typeof v.cwd !== "string") return false;
+  return true;
+}
+
+function isDiffCallView(v: unknown): v is import("./events.js").DiffCallView {
+  if (!isPlainObject(v) || v.card !== "diff") return false;
+  if (typeof v.title !== "string") return false;
+  if (!Array.isArray(v.diffs) || !v.diffs.every(isFileDiff)) return false;
+  if (v.locations !== undefined) {
+    if (!Array.isArray(v.locations) || !v.locations.every(isFileLocation)) return false;
+  }
+  return true;
+}
+
+function isToolCallView(v: unknown): v is import("./events.js").ToolCallView {
+  if (!isPlainObject(v)) return false;
+  switch (v.card) {
+    case "generic":
+      return isGenericCallView(v);
+    case "terminal":
+      return isTerminalCallView(v);
+    case "diff":
+      return isDiffCallView(v);
+    default:
+      return false;
+  }
+}
+
+function isGenericResultView(v: unknown): v is import("./events.js").GenericResultView {
+  if (!isPlainObject(v) || v.card !== "generic") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  return true;
+}
+
+function isTerminalResultView(v: unknown): v is import("./events.js").TerminalResultView {
+  if (!isPlainObject(v) || v.card !== "terminal") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (v.output !== undefined && typeof v.output !== "string") return false;
+  if (v.exitCode !== undefined && typeof v.exitCode !== "number") return false;
+  if (v.signal !== undefined && typeof v.signal !== "string") return false;
+  return true;
+}
+
+function isDiffResultView(v: unknown): v is import("./events.js").DiffResultView {
+  if (!isPlainObject(v) || v.card !== "diff") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (!Array.isArray(v.diffs) || !v.diffs.every(isFileDiff)) return false;
+  return true;
+}
+
+function isSearchLineMatch(v: unknown): v is import("./events.js").SearchLineMatch {
+  if (!isPlainObject(v)) return false;
+  return typeof v.lineNumber === "number" && typeof v.line === "string";
+}
+
+function isSearchFileMatches(v: unknown): v is import("./events.js").SearchFileMatches {
+  if (!isPlainObject(v)) return false;
+  if (typeof v.path !== "string") return false;
+  if (!Array.isArray(v.matches) || !v.matches.every(isSearchLineMatch)) return false;
+  return true;
+}
+
+function isSearchMatchesResultView(v: unknown): v is import("./events.js").SearchMatchesResultView {
+  if (!isPlainObject(v) || v.card !== "search" || v.shape !== "matches") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (!Array.isArray(v.files) || !v.files.every(isSearchFileMatches)) return false;
+  if (typeof v.truncated !== "boolean" || typeof v.total !== "number") return false;
+  return true;
+}
+
+function isSearchPathsResultView(v: unknown): v is import("./events.js").SearchPathsResultView {
+  if (!isPlainObject(v) || v.card !== "search" || v.shape !== "paths") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (!Array.isArray(v.paths) || !v.paths.every((p) => typeof p === "string")) return false;
+  if (typeof v.truncated !== "boolean" || typeof v.total !== "number") return false;
+  return true;
+}
+
+function isSearchResultView(v: unknown): v is import("./events.js").SearchResultView {
+  if (!isPlainObject(v) || v.card !== "search") return false;
+  if (v.shape === "matches") return isSearchMatchesResultView(v);
+  if (v.shape === "paths") return isSearchPathsResultView(v);
+  return false;
+}
+
+function isReadFileLine(v: unknown): v is import("./events.js").ReadFileLine {
+  if (!isPlainObject(v)) return false;
+  return typeof v.number === "number" && typeof v.text === "string";
+}
+
+function isReadResultView(v: unknown): v is import("./events.js").ReadResultView {
+  if (!isPlainObject(v) || v.card !== "read") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (typeof v.path !== "string") return false;
+  if (typeof v.offset !== "number") return false;
+  if (!Array.isArray(v.lines) || !v.lines.every(isReadFileLine)) return false;
+  if (typeof v.totalLines !== "number") return false;
+  if (v.lang !== undefined && typeof v.lang !== "string") return false;
+  return true;
+}
+
+function isWebSource(v: unknown): v is import("./events.js").WebSource {
+  if (!isPlainObject(v)) return false;
+  if (typeof v.url !== "string") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (v.snippet !== undefined && typeof v.snippet !== "string") return false;
+  if (v.publishedAt !== undefined && typeof v.publishedAt !== "string") return false;
+  return true;
+}
+
+function isWebSearchResultView(v: unknown): v is import("./events.js").WebSearchResultView {
+  if (!isPlainObject(v) || v.card !== "web" || v.kind !== "search") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (!Array.isArray(v.sources) || !v.sources.every(isWebSource)) return false;
+  if (v.answer !== undefined && typeof v.answer !== "string") return false;
+  if (typeof v.truncated !== "boolean") return false;
+  return true;
+}
+
+function isWebFetchResultView(v: unknown): v is import("./events.js").WebFetchResultView {
+  if (!isPlainObject(v) || v.card !== "web" || v.kind !== "fetch") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (typeof v.url !== "string") return false;
+  if (typeof v.statusCode !== "number") return false;
+  if (typeof v.truncated !== "boolean") return false;
+  return true;
+}
+
+function isWebResultView(v: unknown): v is import("./events.js").WebResultView {
+  if (!isPlainObject(v) || v.card !== "web") return false;
+  if (v.kind === "search") return isWebSearchResultView(v);
+  if (v.kind === "fetch") return isWebFetchResultView(v);
+  return false;
+}
+
+function isToolResultView(v: unknown): v is import("./events.js").ToolResultView {
+  if (!isPlainObject(v)) return false;
+  switch (v.card) {
+    case "generic":
+      return isGenericResultView(v);
+    case "terminal":
+      return isTerminalResultView(v);
+    case "diff":
+      return isDiffResultView(v);
+    case "search":
+      return isSearchResultView(v);
+    case "read":
+      return isReadResultView(v);
+    case "web":
+      return isWebResultView(v);
+    default:
+      return false;
+  }
+}
+
+function isToolEventView(v: unknown): v is import("./events.js").ToolEventView {
+  if (!isPlainObject(v)) return false;
+  if (v.for === "call") {
+    return isToolCallView(v.view);
+  }
+  if (v.for === "result") {
+    return isToolResultView(v.view);
+  }
+  return false;
+}
+
+export function isSessionEventWire(value: unknown): value is SessionEventWire {
+  if (!isPlainObject(value)) return false;
+  if (!isNonEmptyString(value.type)) return false;
+  if (!isFiniteNumber(value.seq)) return false;
+  if (!isFiniteNumber(value.time)) return false;
+  if (!isPlainObject(value.data)) return false;
+  if (value.view !== undefined && !isToolEventView(value.view)) return false;
+  return true;
+}
+
 function validateInboundPayload(m: unknown, k: string): boolean {
   if (typeof m !== "object" || m === null) return false;
   if ((SETTINGS_INBOUND_KINDS as readonly string[]).includes(k)) {
@@ -299,6 +521,13 @@ function validateOutboundPayload(m: unknown, k: string): boolean {
       if (!Array.isArray(o.items)) return false;
       if (!o.items.every(isSlashMenuItem)) return false;
       return isSlashAvailability(o.availability);
+    case "event":
+      return typeof o.sessionId === "string" && o.sessionId.length > 0
+        && isSessionEventWire(o.event);
+    case "history":
+      return typeof o.sessionId === "string" && o.sessionId.length > 0
+        && Array.isArray(o.events)
+        && o.events.every(isSessionEventWire);
     default:
       return true;
   }
