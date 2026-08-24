@@ -443,7 +443,15 @@ function isToolResultView(v: unknown): v is import("./events.js").ToolResultView
   }
 }
 
-function isToolEventView(v: unknown): v is import("./events.js").ToolEventView {
+/**
+ * Whether `v` is a complete tool render intent: `for: "call"` with a valid
+ * {@link import("./events.js").ToolCallView} or `for: "result"` with a valid
+ * {@link import("./events.js").ToolResultView}, and no other keys.
+ *
+ * @param v - candidate `view` read off an event envelope.
+ * @returns true when the value can be rendered as a tool view.
+ */
+export function isToolEventView(v: unknown): v is import("./events.js").ToolEventView {
   if (!isPlainObject(v)) return false;
   if (v.for === "call") {
     return isToolCallView(v.view) && hasOnlyOwnKeys(v, ["for", "view"]);

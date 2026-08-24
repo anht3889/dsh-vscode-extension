@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { PROTOCOL_VERSION, isOutboundMessage, isInboundMessage } from "./protocol.js";
+import {
+  PROTOCOL_VERSION,
+  isInboundMessage,
+  isOutboundMessage,
+  isToolEventView,
+} from "./protocol.js";
 
 describe("isOutboundMessage", () => {
   it("accepts a hello message", () => {
@@ -457,6 +462,28 @@ describe("session event view", () => {
       kind: "history",
       sessionId: "s1",
       events: [{ ...base, view: { for: "call" } }],
+    })).toBe(false);
+  });
+
+  it("accepts a complete view and rejects a malformed one directly", () => {
+    expect(isToolEventView({
+      for: "call",
+      view: { card: "terminal", title: "bash", description: "Say hi" },
+    })).toBe(true);
+    expect(isToolEventView({
+      for: "result",
+      view: {
+        card: "diff",
+        diffs: [{ path: "/a.ts", oldText: null, newText: "x" }],
+      },
+    })).toBe(true);
+    expect(isToolEventView(undefined)).toBe(false);
+    expect(isToolEventView({ for: "call" })).toBe(false);
+    expect(isToolEventView({ for: "other", view: { card: "generic", title: "x" } }))
+      .toBe(false);
+    expect(isToolEventView({
+      for: "result",
+      view: { card: "diff", diffs: [{ path: "/a.ts", newText: 7 }] },
     })).toBe(false);
   });
 
