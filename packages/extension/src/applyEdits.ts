@@ -1,89 +1,18 @@
 import { isAbsolute, join, resolve } from "node:path";
-import type { SessionEventWire, ToolDiff } from "@dsh-vscode/contract";
+import type { ToolDiff } from "@dsh-vscode/contract";
 // Type-only namespace import: erased at runtime (vitest never resolves `vscode`),
 // but provides the `vscode.*` type annotations used inside `applyDiffs`. The
 // runtime values come from the dynamic `import("vscode")` below.
 import type * as vscode from "vscode";
 
-// ---- pure diff extraction (TDD'd; no `vscode` import here) -----------------
-//
-// A `tool/result` can expose diffs through legacy metadata or arguments and
-// through its presenter result view. Everything is defensive — a missing
-// `data` or `meta` yields `[]` rather than throwing, and there is no hard dep on
-// the dsh-tool-fs runtime.
-
-/** Extract a single render-ready diff from a `data.meta` record, if diff-shaped. */
-function diffFromMeta(data: Record<string, unknown>): ToolDiff | undefined {
-  const meta = data.meta;
-  if (typeof meta !== "object" || meta === null) return undefined;
-  const m = meta as Record<string, unknown>;
-  if (
-    typeof m.path === "string" &&
-    typeof m.oldText === "string" &&
-    typeof m.newText === "string"
-  ) {
-    return { path: m.path, oldText: m.oldText, newText: m.newText };
-  }
-  return undefined;
-}
-
-/** Extract a diff from str-replace-editor `arguments` when `data.meta` is absent. */
-function diffFromArguments(data: Record<string, unknown>): ToolDiff | undefined {
-  const args = data.arguments;
-  if (typeof args !== "object" || args === null) return undefined;
-  const a = args as Record<string, unknown>;
-  if (
-    typeof a.path === "string" &&
-    typeof a.oldText === "string" &&
-    typeof a.newText === "string"
-  ) {
-    return { path: a.path, oldText: a.oldText, newText: a.newText };
-  }
-  return undefined;
-}
-
-/**
- * Extract legacy and presenter `ToolDiff[]` from a session event in source
- * order. Returns an empty array for every event that is not a qualifying
- * `tool/result`, never throws.
- */
-export function diffsFromEvent(event: SessionEventWire): ToolDiff[] {
-  if (typeof event !== "object" || event === null) return [];
-  if (event.type !== "tool/result") return [];
-  const data = event.data;
-  if (typeof data !== "object" || data === null) return [];
-
-  const diffs: ToolDiff[] = [];
-  const legacy = diffFromMeta(data) ?? diffFromArguments(data);
-  if (legacy !== undefined) diffs.push(legacy);
-
-  if (event.view?.for === "result" && event.view.view.card === "diff") {
-    for (const diff of event.view.view.diffs) {
-      const normalized = {
-        path: diff.path,
-        oldText: diff.oldText ?? "",
-        newText: diff.newText,
-      };
-      if (
-        !diffs.some((candidate) =>
-          candidate.path === normalized.path &&
-          candidate.oldText === normalized.oldText &&
-          candidate.newText === normalized.newText
-        )
-      ) {
-        diffs.push(normalized);
-      }
-    }
-  }
-
-  return diffs;
-}
+// The applyable diffs of a `tool/result` come from `toolDiffsFromEvent` in
+// `@dsh-vscode/contract`, the same derivation the webview timeline renders.
 
 // ---- editor application (vscode runtime; typecheck-only) --------------------
 //
 // `vscode` is the VS Code host's ambient module (provided at extension runtime,
 // not resolvable as an npm package). It is imported *dynamically* inside
-// `applyDiffs` so that importing `diffsFromEvent` (in vitest) does not drag in
+// `applyDiffs` so that importing `resolveDiffPath` (in vitest) does not drag in
 // the `vscode` module. `applyDiffs` is typecheck-only, mirroring Task 8's
 // panel.ts treatment.
 

@@ -8,7 +8,11 @@ import type {
   SettingsPathMessage,
   ToolDiff,
 } from "@dsh-vscode/contract";
-import { isInboundMessage, PROTOCOL_VERSION } from "@dsh-vscode/contract";
+import {
+  isInboundMessage,
+  PROTOCOL_VERSION,
+  toolDiffsFromEvent,
+} from "@dsh-vscode/contract";
 import { ProcessManager } from "../processManager.js";
 import type { ProtocolClient } from "../protocolClient.js";
 import {
@@ -17,7 +21,7 @@ import {
   type ExtensionSettingsView,
   type SettingsHost,
 } from "../settingsHost.js";
-import { applyDiffs, diffsFromEvent } from "../applyEdits.js";
+import { applyDiffs } from "../applyEdits.js";
 import { DecorationManager } from "../decorations.js";
 import { nextStatus, protocolMismatchStatus, type DshState } from "../statusBar.js";
 import { encodeImageSelection } from "./attachments.js";
@@ -800,7 +804,7 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
     ) {
       if (m.event.type === "turn/start") this.pending = [];
       if (m.event.type === "tool/result") {
-        this.pending.push(...diffsFromEvent(m.event));
+        this.pending.push(...toolDiffsFromEvent(m.event));
       }
     }
     if (m.kind === "session" || m.kind === "ready") {

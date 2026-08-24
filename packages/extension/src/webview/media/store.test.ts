@@ -7,6 +7,7 @@ import type {
   SlashMenuItem,
   ToolEventView,
 } from "@dsh-vscode/contract";
+import { toolDiffsFromEvent } from "@dsh-vscode/contract";
 import {
   contextPercent,
   filterSessions,
@@ -405,6 +406,19 @@ describe("reduce", () => {
     });
   });
 
+  it("settles only an exact success kind as success", () => {
+    for (const kind of ["cancelled", "aborted", undefined]) {
+      const settled = reduce(
+        initialState,
+        eventMsg("command/done", { commandId: "x", kind }),
+      );
+      expect(settled.timeline[0]).toMatchObject({
+        kind: "command",
+        status: "error",
+      });
+    }
+  });
+
   it("folds command events identically for live events and history", () => {
     const events = [
       eventMsg("command/run", {
@@ -726,6 +740,7 @@ describe("reduce", () => {
     }]);
     expect(state.diffs).toEqual([
       { path: "/x/orphan.ts", oldText: "a", newText: "b" },
+      { path: "/x/new.ts", oldText: "", newText: "new" },
     ]);
 
     const replayed = reduce(initialState, {
@@ -753,7 +768,155 @@ describe("reduce", () => {
     });
   });
 
-  it("records metadata and presenter diffs on the tool row only", () => {
+  it("buffers a presenter-only diff for Apply all", () => {
+    const running = reduce(initialState, eventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "edit",
+      arguments: "{}",
+    }));
+    const done = reduce(running, toolEventMsg("tool/result", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "m1",
+        role: "user",
+        source: { kind: "tool", callId: "c1" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "c1",
+          content: [],
+          isError: false,
+        }],
+      },
+    }, {
+      for: "result",
+      view: {
+        card: "diff",
+        diffs: [{ path: "/x/new.ts", oldText: null, newText: "new" }],
+      },
+    }));
+    expect(done.timeline[0]).toMatchObject({
+      diffs: [{ path: "/x/new.ts", oldText: "", newText: "new" }],
+    });
+    expect(done.diffs).toEqual([
+      { path: "/x/new.ts", oldText: "", newText: "new" },
+    ]);
+  });
+
+  it("buffers diffs from a result that changes no timeline row", () => {
+    const orphan = toolEventMsg("tool/result", {
+      turn: 1,
+      step: 1,
+      // No `message.source.callId`: the fold cannot place a row, but the host
+      // still records the edit, so Apply all must stay paired with it.
+      message: { id: "m1", role: "user", content: [] },
+      meta: { path: "/x/a.ts", oldText: "a", newText: "b" },
+    }, {
+      for: "result",
+      view: {
+        card: "diff",
+        diffs: [{ path: "/x/new.ts", oldText: null, newText: "new" }],
+      },
+    });
+    const state = reduce(initialState, orphan);
+    expect(state.timeline).toEqual([]);
+    expect(state.diffs).toEqual([
+      { path: "/x/a.ts", oldText: "a", newText: "b" },
+      { path: "/x/new.ts", oldText: "", newText: "new" },
+    ]);
+    expect(toolDiffsFromEvent(orphan.event)).toEqual(state.diffs);
+  });
+
+  it("buffers the same diffs the host applies for every result", () => {
+    const results: EventMessage[] = [
+      toolEventMsg("tool/result", {
+        turn: 1,
+        step: 1,
+        message: {
+          id: "m1",
+          role: "user",
+          source: { kind: "tool", callId: "c1" },
+          content: [{
+            type: "tool-result",
+            toolCallId: "c1",
+            content: [],
+            isError: false,
+          }],
+        },
+        meta: { path: "/x/a.ts", oldText: "a", newText: "b" },
+      }, {
+        for: "result",
+        view: {
+          card: "diff",
+          diffs: [
+            { path: "/x/a.ts", oldText: "a", newText: "b" },
+            { path: "/x/b.ts", oldText: null, newText: "c" },
+          ],
+        },
+      }),
+      toolEventMsg("tool/result", {
+        turn: 1,
+        step: 1,
+        message: {
+          id: "m2",
+          role: "user",
+          source: { kind: "tool", callId: "c2" },
+          content: [{
+            type: "tool-result",
+            toolCallId: "c2",
+            content: [],
+            isError: false,
+          }],
+        },
+      }, {
+        for: "result",
+        view: { card: "terminal", output: "ok", exitCode: 0 },
+      }),
+      eventMsg("tool/result", {
+        turn: 1,
+        step: 1,
+        message: {
+          id: "m3",
+          role: "user",
+          source: { kind: "tool", callId: "c3" },
+          content: [{
+            type: "tool-result",
+            toolCallId: "c3",
+            content: [],
+            isError: false,
+          }],
+        },
+        arguments: { path: "/x/c.ts", oldText: "x", newText: "y" },
+      }),
+    ];
+    const live = results.reduce(reduce, { ...initialState, sessionId: "s1" });
+    // What the extension host pushes onto its Apply-all `pending` buffer.
+    const hostPending = results.flatMap((result) =>
+      toolDiffsFromEvent(result.event),
+    );
+    expect(live.diffs).toEqual(hostPending);
+    expect(live.diffs).toEqual([
+      { path: "/x/a.ts", oldText: "a", newText: "b" },
+      { path: "/x/b.ts", oldText: "", newText: "c" },
+      { path: "/x/c.ts", oldText: "x", newText: "y" },
+    ]);
+    // Every buffered diff is also visible on the row that produced it.
+    expect(
+      live.timeline.flatMap((row) => (row.kind === "tool" ? row.diffs : [])),
+    ).toEqual(hostPending);
+
+    const replayed = reduce({ ...initialState, sessionId: "s1" }, {
+      kind: "history",
+      sessionId: "s1",
+      events: results.map((result) => result.event),
+    });
+    expect(replayed.timeline).toEqual(live.timeline);
+    expect(replayed.diffs).toEqual([]);
+  });
+
+  it("records metadata and presenter diffs on the row and the apply buffer", () => {
     const running = reduce(initialState, eventMsg("tool/call", {
       turn: 1,
       step: 1,
@@ -793,6 +956,7 @@ describe("reduce", () => {
     });
     expect(done.diffs).toEqual([
       { path: "/x/a.ts", oldText: "a", newText: "b" },
+      { path: "/x/new.ts", oldText: "", newText: "new" },
     ]);
   });
 

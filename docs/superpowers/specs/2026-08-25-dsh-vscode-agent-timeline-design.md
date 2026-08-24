@@ -132,8 +132,10 @@ One function, used live and on `history`:
 | `tool/call` | Upsert tool row (`status: running`) from `callId`, `name`, `arguments`; apply `view` when `for === "call"` |
 | `tool/result` | Settle matching tool row: `ok` if not error, `stopped` if `error.code === "interrupted"`, else `error`; apply result `view`; extract diffs into the row and `state.diffs` |
 | `command/run` | Upsert command row (`status: running`) from `commandId`, `name`, `args ?? null` |
-| `command/done` | Settle matching command: `success` or `error` from `kind`; `text` is expandable output |
+| `command/done` | Settle matching command: `success` only for `kind: "success"`, every other terminal kind is `error`; `text` is expandable output |
+| `assistant/analysis-end` | Close the open thinking row |
 | `turn/start` | Close streaming/running flags; clear `state.diffs` and approval |
+| `turn/end` | Close streaming/running flags |
 | Other types | No timeline change |
 
 Identity:
@@ -154,7 +156,7 @@ A tool-only assistant step does not invent an empty assistant text row.
 
 **Command.** Collapsed: `/name` plus args when present, plus status. Expanded: `output` when `command/done` carried `text`. Composer slash behavior is unchanged; the stream no longer duplicates the invocation as a user bubble.
 
-**Apply all diffs.** Still after the stream, still posts `{ kind: "apply" }` to the host pending buffer. The host continues to collect diffs from `tool/result` the same way, plus `DiffResultView.diffs` when `view` is present so apply and display stay paired.
+**Apply all diffs.** Still after the stream, still posts `{ kind: "apply" }` to the host pending buffer. Host `pending` and the webview's current-turn buffer both come from one derivation over the same event — legacy `meta`/`arguments` diff first, then `DiffResultView.diffs` normalized (`oldText ?? ""`) and deduplicated — so a row's diffs, the apply buffer, and what apply writes cannot diverge. A `tool/result` that places no row (an unusable `message`) still contributes its diffs.
 
 ### 4.5 Summary derivation
 

@@ -14,7 +14,7 @@ import type {
   ToolDiff,
   ToolResultView,
 } from "@dsh-vscode/contract";
-import { isSessionEventWire } from "@dsh-vscode/contract";
+import { isToolEventView, toolDiffsFromEvent } from "@dsh-vscode/contract";
 import type { ImagesPickedMessage } from "./vscode.js";
 import { formatChipMention } from "./chipMention.js";
 import { filterSlashItems, type SlashGroup } from "./slashFilter.js";
@@ -421,32 +421,17 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+// Host messages reach the webview unvalidated (App.tsx casts `event.data`), so
+// a `view` is only rendered once the contract guard accepts it whole.
+
 function callViewFromEvent(event: SessionEventWire): ToolCallView | undefined {
-  const candidate: unknown = {
-    type: event.type,
-    seq: event.seq,
-    time: event.time,
-    data: {},
-    view: event.view,
-  };
-  if (!isSessionEventWire(candidate) || candidate.view?.for !== "call") {
-    return undefined;
-  }
-  return candidate.view.view;
+  const view: unknown = event.view;
+  return isToolEventView(view) && view.for === "call" ? view.view : undefined;
 }
 
 function resultViewFromEvent(event: SessionEventWire): ToolResultView | undefined {
-  const candidate: unknown = {
-    type: event.type,
-    seq: event.seq,
-    time: event.time,
-    data: {},
-    view: event.view,
-  };
-  if (!isSessionEventWire(candidate) || candidate.view?.for !== "result") {
-    return undefined;
-  }
-  return candidate.view.view;
+  const view: unknown = event.view;
+  return isToolEventView(view) && view.for === "result" ? view.view : undefined;
 }
 
 function upsertTool(
@@ -554,25 +539,6 @@ function toolResultBlock(event: SessionEventWire): {
   };
 }
 
-function diffsFromResultView(view: ToolResultView | undefined): ToolDiff[] {
-  if (view?.card !== "diff" || !Array.isArray(view.diffs)) return [];
-  const diffs: ToolDiff[] = [];
-  for (const diff of view.diffs) {
-    if (
-      typeof diff?.path === "string" &&
-      (typeof diff.oldText === "string" || diff.oldText === null) &&
-      typeof diff.newText === "string"
-    ) {
-      diffs.push({
-        path: diff.path,
-        oldText: diff.oldText ?? "",
-        newText: diff.newText,
-      });
-    }
-  }
-  return diffs;
-}
-
 function closeThinking(rows: TimelineRow[]): TimelineRow[] {
   const index = lastRowIndex(
     rows,
@@ -638,7 +604,9 @@ export function foldEvent(
     case "command/done": {
       const { commandId, kind, text } = event.data;
       if (typeof commandId !== "string") return rows;
-      const status = kind === "error" ? "error" : "success";
+      // Only an explicit success settles as success: any other terminal kind
+      // (error, and anything a later runtime adds) reads as a failed command.
+      const status = kind === "success" ? "success" : "error";
       const output = typeof text === "string" ? text : undefined;
       return upsertCommand(rows, commandId, event.seq, (row) => ({
         ...row,
@@ -792,11 +760,7 @@ export function foldEvent(
       const result = toolResultBlock(event);
       if (result === undefined) return rows;
       const resultView = resultViewFromEvent(event);
-      const metadataDiff = diffFromEventData(event.data);
-      const diffs = [
-        ...(metadataDiff === undefined ? [] : [metadataDiff]),
-        ...diffsFromResultView(resultView),
-      ];
+      const diffs = toolDiffsFromEvent(event);
       const resultText = messageText(result.content);
       const error = toolError(event.data.error);
       const failed = result.isError || record(event.data.error) !== undefined;
@@ -828,30 +792,6 @@ export function foldEvent(
     default:
       return rows;
   }
-}
-
-/**
- * Extract a render-ready diff record from tool result metadata or arguments.
- */
-function diffFromRecord(value: unknown): ToolDiff | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  if (
-    typeof record.path === "string" &&
-    typeof record.oldText === "string" &&
-    typeof record.newText === "string"
-  ) {
-    return {
-      path: record.path,
-      oldText: record.oldText,
-      newText: record.newText,
-    };
-  }
-  return undefined;
-}
-
-function diffFromEventData(data: Record<string, unknown>): ToolDiff | undefined {
-  return diffFromRecord(data.meta) ?? diffFromRecord(data.arguments);
 }
 
 /** Filter recent sessions by case-insensitive title text. */
@@ -1476,80 +1416,54 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       ) {
         return state;
       }
+      // One fold for live and replayed events: `foldEvent` owns which types
+      // change the timeline, and an unchanged timeline is reference-equal.
       const type = msg.event.type;
+      const timeline = foldEvent(state.timeline, msg.event);
       if (type === "turn/start") {
         return {
           ...state,
           approval: undefined,
           diffs: [],
           status: "thinking",
-          timeline: foldEvent(state.timeline, msg.event),
+          timeline,
         };
       }
       if (type === "turn/end") {
+        return { ...state, approval: undefined, status: "idle", timeline };
+      }
+      if (type === "command/run") {
+        const name = commandRunName(msg.event);
+        const pending = state.pendingCommandSubmission;
+        const matchesPending =
+          name !== undefined &&
+          pending !== undefined &&
+          commandNameFromLine(pending.line) === name;
+        const unchanged =
+          matchesPending &&
+          state.draft === pending.draft &&
+          sameChips(state.chips, pending.chips);
         return {
           ...state,
-          approval: undefined,
-          status: "idle",
-          timeline: foldEvent(state.timeline, msg.event),
+          timeline,
+          ...(unchanged
+            ? {
+                draft: "",
+                chips: [],
+                picker: undefined,
+                commandClaim: undefined,
+              }
+            : {}),
+          ...(matchesPending
+            ? {
+                submitPending: false,
+                pendingCommandSubmission: undefined,
+              }
+            : {}),
+          status: "thinking",
         };
       }
-      if (
-        type === "user/message" ||
-        type === "assistant/chunk" ||
-        type === "assistant/message" ||
-        type === "assistant/analysis-end" ||
-        type === "command/run" ||
-        type === "tool/call" ||
-        type === "tool/result"
-      ) {
-        const timeline = foldEvent(state.timeline, msg.event);
-        if (type === "command/run") {
-          const name = commandRunName(msg.event);
-          const pending = state.pendingCommandSubmission;
-          const matchesPending =
-            name !== undefined &&
-            pending !== undefined &&
-            commandNameFromLine(pending.line) === name;
-          const unchanged =
-            matchesPending &&
-            state.draft === pending.draft &&
-            sameChips(state.chips, pending.chips);
-          return {
-            ...state,
-            timeline,
-            ...(unchanged
-              ? {
-                  draft: "",
-                  chips: [],
-                  picker: undefined,
-                  commandClaim: undefined,
-                }
-              : {}),
-            ...(matchesPending
-              ? {
-                  submitPending: false,
-                  pendingCommandSubmission: undefined,
-                }
-              : {}),
-            status: "thinking",
-          };
-        }
-        if (type === "tool/result") {
-          if (timeline === state.timeline) return state;
-          const diff = diffFromEventData(msg.event.data);
-          return {
-            ...state,
-            timeline,
-            ...(diff === undefined
-              ? {}
-              : { diffs: [...state.diffs, diff] }),
-          };
-        }
-        return timeline === state.timeline ? state : { ...state, timeline };
-      }
       if (type === "command/done") {
-        const timeline = foldEvent(state.timeline, msg.event);
         const settled = settlePendingCommand(state);
         if (
           timeline === state.timeline &&
@@ -1560,7 +1474,15 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         }
         return { ...state, timeline, status: "idle", ...settled };
       }
-      return state;
+      // The apply buffer follows the host's `pending` list, so a result whose
+      // row cannot be placed still contributes its diffs.
+      const diffs = toolDiffsFromEvent(msg.event);
+      if (timeline === state.timeline && diffs.length === 0) return state;
+      return {
+        ...state,
+        timeline,
+        ...(diffs.length === 0 ? {} : { diffs: [...state.diffs, ...diffs] }),
+      };
     }
 
     default:
