@@ -227,6 +227,33 @@ describe("isSettingsInboundCommand", () => {
       requestId: "oauth",
       operation: { kind: "clearOAuthTokens", serverId: "docs-id" },
     })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "provision",
+      operation: {
+        kind: "provisionOAuthServer",
+        serverName: "docs",
+        url: "https://mcp.example/rpc",
+        enabled: true,
+      },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "start",
+      operation: { kind: "startOAuth", serverId: "docs-id" },
+    })).toBe(true);
+  });
+
+  it("rejects a provisionOAuthServer operation missing its URL", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "provision",
+      operation: {
+        kind: "provisionOAuthServer",
+        serverName: "docs",
+        enabled: true,
+      },
+    })).toBe(false);
   });
 
   it("accepts headers, OAuth, and streamable-http server inputs", () => {
@@ -278,6 +305,38 @@ describe("isSettingsInboundCommand", () => {
         },
       },
     })).toBe(true);
+  });
+
+  it("accepts an MCP OAuth discovery request", () => {
+    expect(isSettingsInboundCommand({
+      kind: "discoverMcpOAuth",
+      requestId: "disc1",
+      url: "https://mcp.example/rpc",
+    })).toBe(true);
+  });
+
+  it("rejects malformed MCP OAuth discovery requests", () => {
+    expect(isSettingsInboundCommand({
+      kind: "discoverMcpOAuth",
+      requestId: "disc1",
+      url: "",
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "discoverMcpOAuth",
+      requestId: "",
+      url: "https://mcp.example/rpc",
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "discoverMcpOAuth",
+      requestId: "disc1",
+      url: "x".repeat(MAX_WIRE_URL_LENGTH + 1),
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "discoverMcpOAuth",
+      requestId: "disc1",
+      url: "https://mcp.example/rpc",
+      serverId: "docs-id",
+    })).toBe(false);
   });
 
   it("rejects malformed capability and section commands", () => {
@@ -879,6 +938,11 @@ describe("isSettingsOutboundMessage", () => {
       result: { ok: true, detail: mcpDetail },
     })).toBe(true);
     expect(isSettingsOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: { ok: true, authorizeUrl: "https://idp.example/authorize" },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
       kind: "webSearchMutation",
       requestId: "w1",
       result: {
@@ -1016,7 +1080,27 @@ describe("isSettingsOutboundMessage", () => {
           disabledToolCount: 0,
         }],
         secretStates: "available",
-        oauth: { kind: "manual", reason: "no-callback-origin" },
+        oauth: {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery: "available",
+          authorization: "unavailable",
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp-loopback",
+      view: {
+        section: "mcp",
+        servers: [],
+        secretStates: "available",
+        oauth: {
+          kind: "loopback",
+          origin: "http://127.0.0.1:9",
+          discovery: "available",
+          authorization: "available",
+        },
       },
     })).toBe(true);
     expect(isSettingsOutboundMessage({
@@ -1024,6 +1108,145 @@ describe("isSettingsOutboundMessage", () => {
       requestId: "web-search",
       view: webSearchView,
     })).toBe(true);
+  });
+
+  it("requires the MCP view to state whether discovery is reachable", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp",
+      view: {
+        section: "mcp",
+        servers: [],
+        secretStates: "available",
+        oauth: { kind: "manual", reason: "no-callback-origin" },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp",
+      view: {
+        section: "mcp",
+        servers: [],
+        secretStates: "available",
+        oauth: {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery: "available",
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp",
+      view: {
+        section: "mcp",
+        servers: [],
+        secretStates: "available",
+        oauth: {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery: "elsewhere",
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp",
+      view: {
+        section: "mcp",
+        servers: [],
+        secretStates: "available",
+        oauth: {
+          kind: "loopback",
+          origin: "http://127.0.0.1:9",
+          discovery: "available",
+          authorization: "unavailable",
+        },
+      },
+    })).toBe(false);
+  });
+
+  it("accepts an MCP OAuth discovery reply", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: {
+        ok: true,
+        discovery: {
+          clientId: "issued-client",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: ["docs:read"],
+          registered: true,
+          clientSecretIssued: false,
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: {
+        ok: true,
+        discovery: {
+          clientId: "",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: [],
+          registered: false,
+          clientSecretIssued: false,
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: {
+        ok: false,
+        error: { code: "mcp-rejected", message: "discovery failed" },
+      },
+    })).toBe(true);
+  });
+
+  it("rejects an MCP OAuth discovery reply that carries a secret or breaks its caps", () => {
+    const discovery = {
+      clientId: "issued-client",
+      authorizeUrl: "https://auth.example/authorize",
+      tokenUrl: "https://auth.example/token",
+      scopes: ["docs:read"],
+      registered: true,
+      clientSecretIssued: true,
+    };
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: { ok: true, discovery: { ...discovery, secret: "issued" } },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: {
+        ok: true,
+        discovery: { ...discovery, scopes: Array(MAX_MCP_SCOPES + 1).fill("read") },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: {
+        ok: true,
+        discovery: { ...discovery, authorizeUrl: "x".repeat(MAX_WIRE_URL_LENGTH + 1) },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: { ok: true, discovery: { ...discovery, registered: "yes" } },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "",
+      result: { ok: true, discovery },
+    })).toBe(false);
   });
 
   it("rejects malformed capability announcements", () => {
@@ -1108,7 +1331,12 @@ describe("isSettingsOutboundMessage", () => {
           (_, index) => makeMcpListItem(index),
         ),
         secretStates: "available",
-        oauth: { kind: "manual", reason: "no-callback-origin" },
+        oauth: {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery: "available",
+          authorization: "unavailable",
+        },
       },
     })).toBe(false);
   });
@@ -1180,6 +1408,29 @@ describe("isSettingsOutboundMessage", () => {
     })).toBe(false);
   });
 
+  it("rejects an MCP operation authorizeUrl over its cap or carrying secrets", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: { ok: true, authorizeUrl: "x".repeat(MAX_WIRE_URL_LENGTH + 1) },
+    })).toBe(false);
+    for (const leaked of [
+      { clientSecret: "issued" },
+      { code: "auth-code" },
+      { code_verifier: "pkce" },
+    ]) {
+      expect(isSettingsOutboundMessage({
+        kind: "mcpOperation",
+        requestId: "o1",
+        result: {
+          ok: true,
+          authorizeUrl: "https://idp.example/authorize",
+          ...leaked,
+        },
+      })).toBe(false);
+    }
+  });
+
   it("rejects undeclared credential-bearing fields in a Web Search view", () => {
     const secretFields = [
       { ref: "TAVILY_API_KEY", value: "tvly-x" },
@@ -1230,7 +1481,12 @@ describe("isSettingsOutboundMessage", () => {
           makeMcpListItem(2, sharedStatus),
         ],
         secretStates: "available",
-        oauth: { kind: "manual", reason: "no-callback-origin" },
+        oauth: {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery: "available",
+          authorization: "unavailable",
+        },
       },
     })).toBe(false);
   });

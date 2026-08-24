@@ -225,8 +225,29 @@ export interface McpLogEntryWire {
   detail?: string;
 }
 
+/**
+ * How much of the OAuth flow this host can drive.
+ *
+ * Authorization is `available` only for `kind: "loopback"`: the host named a
+ * callback origin and can start the browser flow. `kind: "manual"` keeps
+ * `authorization: "unavailable"` because there is no callback origin, so an
+ * operator completes login in DSH Web. `discovery` is separate because endpoint
+ * discovery needs no callback — it reports whether the mounted MCP plugin
+ * exposes the discovery entry point at all.
+ */
 export type McpOAuthSupportWire =
-  | { kind: "manual"; reason: "no-callback-origin" };
+  | {
+      kind: "manual";
+      reason: "no-callback-origin";
+      discovery: "available" | "unavailable";
+      authorization: "unavailable";
+    }
+  | {
+      kind: "loopback";
+      origin: string;
+      discovery: "available" | "unavailable";
+      authorization: "available";
+    };
 
 export interface McpSettingsView {
   section: "mcp";
@@ -332,12 +353,31 @@ export type McpOperationWire =
   | { kind: "disconnectServer"; serverId: string }
   | { kind: "setToolEnabled"; serverId: string; toolName: string; enabled: boolean }
   | { kind: "setServerSecrets"; serverId: string; secrets: { name: string; value: string }[] }
-  | { kind: "clearOAuthTokens"; serverId: string };
+  | { kind: "clearOAuthTokens"; serverId: string }
+  | {
+      kind: "provisionOAuthServer";
+      serverName: string;
+      url: string;
+      enabled: boolean;
+    }
+  | { kind: "startOAuth"; serverId: string };
 
 export interface RunMcpOperationCommand {
   kind: "runMcpOperation";
   requestId: string;
   operation: McpOperationWire;
+}
+
+/**
+ * Ask the mounted MCP plugin to resolve OAuth endpoints from a server URL.
+ *
+ * Carries no server identifier: the editor discovers against the URL in an
+ * unsaved draft, before any record exists.
+ */
+export interface DiscoverMcpOAuthCommand {
+  kind: "discoverMcpOAuth";
+  requestId: string;
+  url: string;
 }
 
 export interface SetWebSearchConfigCommand {
@@ -405,6 +445,7 @@ export type SettingsInboundCommand =
   | GetMcpServerCommand
   | GetMcpLogsCommand
   | RunMcpOperationCommand
+  | DiscoverMcpOAuthCommand
   | SetWebSearchConfigCommand
   | MutateSettingsCommand
   | SetCredentialCommand
@@ -493,7 +534,32 @@ export interface McpOperationMessage {
   kind: "mcpOperation";
   requestId: string;
   result:
-    | { ok: true; detail?: McpServerDetailWire }
+    | { ok: true; detail?: McpServerDetailWire; authorizeUrl?: string }
+    | { ok: false; error: SettingsErrorWire };
+}
+
+/**
+ * Non-secret OAuth fields resolved from an MCP server URL.
+ *
+ * `clientId` is empty when the authorization server published no registration
+ * endpoint. A Dynamic Client Registration secret never crosses this wire, so
+ * `clientSecretIssued` reports that one exists and the operator must supply it
+ * through the write-only client-secret field.
+ */
+export interface McpOAuthDiscoveryWire {
+  clientId: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  scopes: string[];
+  registered: boolean;
+  clientSecretIssued: boolean;
+}
+
+export interface McpOAuthDiscoveryMessage {
+  kind: "mcpOAuthDiscovery";
+  requestId: string;
+  result:
+    | { ok: true; discovery: McpOAuthDiscoveryWire }
     | { ok: false; error: SettingsErrorWire };
 }
 
@@ -519,6 +585,7 @@ export type SettingsOutboundMessage =
   | McpServerMessage
   | McpLogsMessage
   | McpOperationMessage
+  | McpOAuthDiscoveryMessage
   | WebSearchMutationMessage;
 
 const SETTINGS_SECTION_IDS: readonly SettingsSectionId[] = [
@@ -580,6 +647,10 @@ const CREDENTIAL_VALUE_FIELD_NAMES = new Set([
   "apiKey",
   "token",
   "password",
+  "clientSecret",
+  "client_secret",
+  "code_verifier",
+  "refresh_token",
 ]);
 
 const KEBAB_NAMESPACE = /^[a-z][a-z0-9-]*$/;
@@ -589,10 +660,12 @@ const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/;
 /** Bounds for recursive wire payload scans; exceed → fail closed. */
 const MAX_WIRE_SCAN_DEPTH = 32;
 /**
- * The largest producer payload is a maximal MCP list view: 36,874 nodes
- * including its three-node message envelope. The bridge caps that view at
- * 40,960 nodes, below this 65,536-node scan budget. The Models view is the
- * second-largest producer at about 26,000 nodes.
+ * The largest producer payload is a maximal MCP list view: 36,876 nodes
+ * including its three-node message envelope and the oauth `authorization`
+ * field. The bridge caps that view at 40,960 nodes, below this 65,536-node
+ * scan budget. The Models view is the second-largest producer at about
+ * 26,000 nodes. A loopback oauth object also carries `origin` and stays
+ * within the same ceiling.
  */
 const MAX_WIRE_SCAN_NODES = 65_536;
 
@@ -608,6 +681,7 @@ export const SETTINGS_INBOUND_KINDS = [
   "getMcpServer",
   "getMcpLogs",
   "runMcpOperation",
+  "discoverMcpOAuth",
   "setWebSearchConfig",
   "mutateSettings",
   "setCredential",
@@ -624,6 +698,7 @@ export const SETTINGS_OUTBOUND_KINDS = [
   "mcpServer",
   "mcpLogs",
   "mcpOperation",
+  "mcpOAuthDiscovery",
   "webSearchMutation",
   "settingsMutation",
   "settingsInvalidated",
@@ -1000,6 +1075,14 @@ function isMcpOperationWire(value: unknown): value is McpOperationWire {
           MAX_MCP_SECRET_ENTRIES,
           isMcpSecretInputWire,
         );
+    case "provisionOAuthServer":
+      return isClosedRecord(value, ["kind", "serverName", "url", "enabled"], ["kind", "serverName", "url", "enabled"])
+        && isBoundedNonEmptyString(value.serverName, MAX_WIRE_IDENTIFIER_LENGTH)
+        && isBoundedNonEmptyString(value.url, MAX_WIRE_URL_LENGTH)
+        && typeof value.enabled === "boolean";
+    case "startOAuth":
+      return isClosedRecord(value, ["kind", "serverId"], ["kind", "serverId"])
+        && isBoundedNonEmptyString(value.serverId, MAX_WIRE_IDENTIFIER_LENGTH);
     default:
       return false;
   }
@@ -1095,9 +1178,33 @@ function isMcpSettingsView(value: unknown): value is McpSettingsView {
       ),
     )
     && (value.secretStates === "available" || value.secretStates === "unavailable")
-    && isClosedRecord(value.oauth, ["kind", "reason"], ["kind", "reason"])
-    && value.oauth.kind === "manual"
-    && value.oauth.reason === "no-callback-origin";
+    && isMcpOAuthSupportWire(value.oauth);
+}
+
+function isMcpOAuthSupportWire(value: unknown): value is McpOAuthSupportWire {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  switch (value.kind) {
+    case "manual":
+      return isClosedRecord(value, [
+        "kind", "reason", "discovery", "authorization",
+      ], [
+        "kind", "reason", "discovery", "authorization",
+      ])
+        && value.reason === "no-callback-origin"
+        && (value.discovery === "available" || value.discovery === "unavailable")
+        && value.authorization === "unavailable";
+    case "loopback":
+      return isClosedRecord(value, [
+        "kind", "origin", "discovery", "authorization",
+      ], [
+        "kind", "origin", "discovery", "authorization",
+      ])
+        && isBoundedNonEmptyString(value.origin, MAX_WIRE_URL_LENGTH)
+        && (value.discovery === "available" || value.discovery === "unavailable")
+        && value.authorization === "available";
+    default:
+      return false;
+  }
 }
 
 interface WireScanState {
@@ -1531,6 +1638,19 @@ function validateRunMcpOperationCommand(
     && isMcpOperationWire(value.operation);
 }
 
+function validateDiscoverMcpOAuthCommand(
+  value: unknown,
+): value is DiscoverMcpOAuthCommand {
+  return isClosedRecord(value, [
+    "kind", "requestId", "url",
+  ], [
+    "kind", "requestId", "url",
+  ])
+    && value.kind === "discoverMcpOAuth"
+    && isNonEmptyRequestId(value.requestId)
+    && isBoundedNonEmptyString(value.url, MAX_WIRE_URL_LENGTH);
+}
+
 function validateSetWebSearchConfigCommand(
   value: unknown,
 ): value is SetWebSearchConfigCommand {
@@ -1706,9 +1826,11 @@ function validateMcpLogsMessage(value: unknown): value is McpLogsMessage {
 }
 
 function isMcpOperationSuccessResult(value: unknown): boolean {
-  return isClosedRecord(value, ["ok", "detail"], ["ok"])
+  return isClosedRecord(value, ["ok", "detail", "authorizeUrl"], ["ok"])
     && value.ok === true
-    && (value.detail === undefined || isMcpServerDetailWire(value.detail));
+    && (value.detail === undefined || isMcpServerDetailWire(value.detail))
+    && (value.authorizeUrl === undefined
+      || isBoundedNonEmptyString(value.authorizeUrl, MAX_WIRE_URL_LENGTH));
 }
 
 function validateMcpOperationMessage(value: unknown): value is McpOperationMessage {
@@ -1720,6 +1842,51 @@ function validateMcpOperationMessage(value: unknown): value is McpOperationMessa
   if (value.kind !== "mcpOperation" || !isNonEmptyRequestId(value.requestId)) return false;
   if (
     !isMcpOperationSuccessResult(value.result)
+    && !isSettingsErrorResult(value.result)
+  ) return false;
+  return !containsOutboundCredentialValueField(value);
+}
+
+function isMcpOAuthDiscoveryWire(value: unknown): value is McpOAuthDiscoveryWire {
+  return isClosedRecord(value, [
+    "clientId", "authorizeUrl", "tokenUrl", "scopes", "registered", "clientSecretIssued",
+  ], [
+    "clientId", "authorizeUrl", "tokenUrl", "scopes", "registered", "clientSecretIssued",
+  ])
+    && isBoundedString(value.clientId, MAX_WIRE_IDENTIFIER_LENGTH)
+    && isBoundedNonEmptyString(value.authorizeUrl, MAX_WIRE_URL_LENGTH)
+    && isBoundedNonEmptyString(value.tokenUrl, MAX_WIRE_URL_LENGTH)
+    && isBoundedArray(
+      value.scopes,
+      MAX_MCP_SCOPES,
+      (scope): scope is string => (
+        isBoundedNonEmptyString(scope, MAX_WIRE_IDENTIFIER_LENGTH)
+      ),
+    )
+    && typeof value.registered === "boolean"
+    && typeof value.clientSecretIssued === "boolean";
+}
+
+function isMcpOAuthDiscoverySuccessResult(value: unknown): boolean {
+  return isClosedRecord(value, ["ok", "discovery"], ["ok", "discovery"])
+    && value.ok === true
+    && isMcpOAuthDiscoveryWire(value.discovery);
+}
+
+function validateMcpOAuthDiscoveryMessage(
+  value: unknown,
+): value is McpOAuthDiscoveryMessage {
+  if (!isClosedRecord(value, [
+    "kind", "requestId", "result",
+  ], [
+    "kind", "requestId", "result",
+  ])) return false;
+  if (
+    value.kind !== "mcpOAuthDiscovery"
+    || !isNonEmptyRequestId(value.requestId)
+  ) return false;
+  if (
+    !isMcpOAuthDiscoverySuccessResult(value.result)
     && !isSettingsErrorResult(value.result)
   ) return false;
   return !containsOutboundCredentialValueField(value);
@@ -1828,6 +1995,8 @@ export function isSettingsInboundCommand(value: unknown): value is SettingsInbou
       return validateGetMcpLogsCommand(value);
     case "runMcpOperation":
       return validateRunMcpOperationCommand(value);
+    case "discoverMcpOAuth":
+      return validateDiscoverMcpOAuthCommand(value);
     case "setWebSearchConfig":
       return validateSetWebSearchConfigCommand(value);
     case "mutateSettings":
@@ -1875,6 +2044,8 @@ export function isSettingsOutboundMessage(value: unknown): value is SettingsOutb
       return validateMcpLogsMessage(value);
     case "mcpOperation":
       return validateMcpOperationMessage(value);
+    case "mcpOAuthDiscovery":
+      return validateMcpOAuthDiscoveryMessage(value);
     case "webSearchMutation":
       return validateWebSearchMutationMessage(value);
     case "settingsMutation":
