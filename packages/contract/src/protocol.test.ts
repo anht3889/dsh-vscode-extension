@@ -459,4 +459,75 @@ describe("session event view", () => {
       events: [{ ...base, view: { for: "call" } }],
     })).toBe(false);
   });
+
+  it("rejects extra properties on ToolEventView", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: {
+        ...base,
+        view: { for: "call", view: { card: "generic", title: "Run bash" }, extra: true },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects non-array generic call content", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: {
+        ...base,
+        view: { for: "call", view: { card: "generic", title: "Run bash", content: "not-an-array" } },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects non-array generic result content", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: {
+        type: "tool/result",
+        seq: 2,
+        time: 1,
+        data: { callId: "c1" },
+        view: { for: "result", view: { card: "generic", content: {} } },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects non-array read result content", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: {
+        type: "tool/result",
+        seq: 2,
+        time: 1,
+        data: { callId: "c1" },
+        view: {
+          for: "result",
+          view: {
+            card: "read",
+            path: "foo.ts",
+            offset: 1,
+            lines: [{ number: 1, text: "x" }],
+            totalLines: 1,
+            content: "not-an-array",
+          },
+        },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects extra properties on generic call view", () => {
+    expect(isOutboundMessage({
+      kind: "event",
+      sessionId: "s1",
+      event: {
+        ...base,
+        view: { for: "call", view: { card: "generic", title: "Run bash", bogus: 1 } },
+      },
+    })).toBe(false);
+  });
 });

@@ -245,11 +245,15 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function isUnknownArray(v: unknown): v is unknown[] {
+  return Array.isArray(v);
+}
+
 function isFileLocation(v: unknown): v is import("./events.js").FileLocation {
   if (!isPlainObject(v)) return false;
   if (typeof v.path !== "string") return false;
   if (v.line !== undefined && typeof v.line !== "number") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["path", "line"]);
 }
 
 function isFileDiff(v: unknown): v is import("./events.js").FileDiff {
@@ -257,7 +261,7 @@ function isFileDiff(v: unknown): v is import("./events.js").FileDiff {
   if (typeof v.path !== "string") return false;
   if (v.oldText !== null && typeof v.oldText !== "string") return false;
   if (typeof v.newText !== "string") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["path", "oldText", "newText"]);
 }
 
 function isToolCallKind(v: unknown): v is import("./events.js").ToolCallKind {
@@ -269,10 +273,11 @@ function isGenericCallView(v: unknown): v is import("./events.js").GenericCallVi
   if (!isPlainObject(v) || v.card !== "generic") return false;
   if (typeof v.title !== "string") return false;
   if (v.kind !== undefined && !isToolCallKind(v.kind)) return false;
+  if (v.content !== undefined && !isUnknownArray(v.content)) return false;
   if (v.locations !== undefined) {
     if (!Array.isArray(v.locations) || !v.locations.every(isFileLocation)) return false;
   }
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "title", "kind", "rawInput", "content", "locations"]);
 }
 
 function isTerminalCallView(v: unknown): v is import("./events.js").TerminalCallView {
@@ -280,7 +285,7 @@ function isTerminalCallView(v: unknown): v is import("./events.js").TerminalCall
   if (typeof v.title !== "string") return false;
   if (v.description !== undefined && typeof v.description !== "string") return false;
   if (v.cwd !== undefined && typeof v.cwd !== "string") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "title", "description", "cwd"]);
 }
 
 function isDiffCallView(v: unknown): v is import("./events.js").DiffCallView {
@@ -290,7 +295,7 @@ function isDiffCallView(v: unknown): v is import("./events.js").DiffCallView {
   if (v.locations !== undefined) {
     if (!Array.isArray(v.locations) || !v.locations.every(isFileLocation)) return false;
   }
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "title", "diffs", "locations"]);
 }
 
 function isToolCallView(v: unknown): v is import("./events.js").ToolCallView {
@@ -310,7 +315,8 @@ function isToolCallView(v: unknown): v is import("./events.js").ToolCallView {
 function isGenericResultView(v: unknown): v is import("./events.js").GenericResultView {
   if (!isPlainObject(v) || v.card !== "generic") return false;
   if (v.title !== undefined && typeof v.title !== "string") return false;
-  return true;
+  if (v.content !== undefined && !isUnknownArray(v.content)) return false;
+  return hasOnlyOwnKeys(v, ["card", "title", "content"]);
 }
 
 function isTerminalResultView(v: unknown): v is import("./events.js").TerminalResultView {
@@ -319,26 +325,27 @@ function isTerminalResultView(v: unknown): v is import("./events.js").TerminalRe
   if (v.output !== undefined && typeof v.output !== "string") return false;
   if (v.exitCode !== undefined && typeof v.exitCode !== "number") return false;
   if (v.signal !== undefined && typeof v.signal !== "string") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "title", "output", "exitCode", "signal"]);
 }
 
 function isDiffResultView(v: unknown): v is import("./events.js").DiffResultView {
   if (!isPlainObject(v) || v.card !== "diff") return false;
   if (v.title !== undefined && typeof v.title !== "string") return false;
   if (!Array.isArray(v.diffs) || !v.diffs.every(isFileDiff)) return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "title", "diffs"]);
 }
 
 function isSearchLineMatch(v: unknown): v is import("./events.js").SearchLineMatch {
   if (!isPlainObject(v)) return false;
-  return typeof v.lineNumber === "number" && typeof v.line === "string";
+  if (typeof v.lineNumber !== "number" || typeof v.line !== "string") return false;
+  return hasOnlyOwnKeys(v, ["lineNumber", "line"]);
 }
 
 function isSearchFileMatches(v: unknown): v is import("./events.js").SearchFileMatches {
   if (!isPlainObject(v)) return false;
   if (typeof v.path !== "string") return false;
   if (!Array.isArray(v.matches) || !v.matches.every(isSearchLineMatch)) return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["path", "matches"]);
 }
 
 function isSearchMatchesResultView(v: unknown): v is import("./events.js").SearchMatchesResultView {
@@ -346,7 +353,7 @@ function isSearchMatchesResultView(v: unknown): v is import("./events.js").Searc
   if (v.title !== undefined && typeof v.title !== "string") return false;
   if (!Array.isArray(v.files) || !v.files.every(isSearchFileMatches)) return false;
   if (typeof v.truncated !== "boolean" || typeof v.total !== "number") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "shape", "title", "files", "truncated", "total"]);
 }
 
 function isSearchPathsResultView(v: unknown): v is import("./events.js").SearchPathsResultView {
@@ -354,7 +361,7 @@ function isSearchPathsResultView(v: unknown): v is import("./events.js").SearchP
   if (v.title !== undefined && typeof v.title !== "string") return false;
   if (!Array.isArray(v.paths) || !v.paths.every((p) => typeof p === "string")) return false;
   if (typeof v.truncated !== "boolean" || typeof v.total !== "number") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "shape", "title", "paths", "truncated", "total"]);
 }
 
 function isSearchResultView(v: unknown): v is import("./events.js").SearchResultView {
@@ -366,7 +373,8 @@ function isSearchResultView(v: unknown): v is import("./events.js").SearchResult
 
 function isReadFileLine(v: unknown): v is import("./events.js").ReadFileLine {
   if (!isPlainObject(v)) return false;
-  return typeof v.number === "number" && typeof v.text === "string";
+  if (typeof v.number !== "number" || typeof v.text !== "string") return false;
+  return hasOnlyOwnKeys(v, ["number", "text"]);
 }
 
 function isReadResultView(v: unknown): v is import("./events.js").ReadResultView {
@@ -377,7 +385,8 @@ function isReadResultView(v: unknown): v is import("./events.js").ReadResultView
   if (!Array.isArray(v.lines) || !v.lines.every(isReadFileLine)) return false;
   if (typeof v.totalLines !== "number") return false;
   if (v.lang !== undefined && typeof v.lang !== "string") return false;
-  return true;
+  if (v.content !== undefined && !isUnknownArray(v.content)) return false;
+  return hasOnlyOwnKeys(v, ["card", "title", "path", "offset", "lines", "totalLines", "lang", "content"]);
 }
 
 function isWebSource(v: unknown): v is import("./events.js").WebSource {
@@ -386,7 +395,7 @@ function isWebSource(v: unknown): v is import("./events.js").WebSource {
   if (v.title !== undefined && typeof v.title !== "string") return false;
   if (v.snippet !== undefined && typeof v.snippet !== "string") return false;
   if (v.publishedAt !== undefined && typeof v.publishedAt !== "string") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["url", "title", "snippet", "publishedAt"]);
 }
 
 function isWebSearchResultView(v: unknown): v is import("./events.js").WebSearchResultView {
@@ -395,7 +404,7 @@ function isWebSearchResultView(v: unknown): v is import("./events.js").WebSearch
   if (!Array.isArray(v.sources) || !v.sources.every(isWebSource)) return false;
   if (v.answer !== undefined && typeof v.answer !== "string") return false;
   if (typeof v.truncated !== "boolean") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "kind", "title", "sources", "answer", "truncated"]);
 }
 
 function isWebFetchResultView(v: unknown): v is import("./events.js").WebFetchResultView {
@@ -404,7 +413,7 @@ function isWebFetchResultView(v: unknown): v is import("./events.js").WebFetchRe
   if (typeof v.url !== "string") return false;
   if (typeof v.statusCode !== "number") return false;
   if (typeof v.truncated !== "boolean") return false;
-  return true;
+  return hasOnlyOwnKeys(v, ["card", "kind", "title", "url", "statusCode", "truncated"]);
 }
 
 function isWebResultView(v: unknown): v is import("./events.js").WebResultView {
@@ -437,10 +446,10 @@ function isToolResultView(v: unknown): v is import("./events.js").ToolResultView
 function isToolEventView(v: unknown): v is import("./events.js").ToolEventView {
   if (!isPlainObject(v)) return false;
   if (v.for === "call") {
-    return isToolCallView(v.view);
+    return isToolCallView(v.view) && hasOnlyOwnKeys(v, ["for", "view"]);
   }
   if (v.for === "result") {
-    return isToolResultView(v.view);
+    return isToolResultView(v.view) && hasOnlyOwnKeys(v, ["for", "view"]);
   }
   return false;
 }
