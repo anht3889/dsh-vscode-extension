@@ -548,9 +548,15 @@ describe("reduce", () => {
   });
 
   it("keeps interrupted and failed tool result name and code", () => {
-    for (const error of [
-      { name: "AbortError", code: "interrupted" },
-      { name: "Error", code: "fail", detail: "not retained" },
+    for (const { error, status } of [
+      {
+        error: { name: "AbortError", code: "interrupted" },
+        status: "stopped",
+      },
+      {
+        error: { name: "Error", code: "fail", detail: "not retained" },
+        status: "error",
+      },
     ]) {
       const running = reduce(initialState, eventMsg("tool/call", {
         turn: 1,
@@ -577,15 +583,15 @@ describe("reduce", () => {
       }));
       expect(failed.timeline[0]).toMatchObject({
         kind: "tool",
-        status: "error",
+        status,
         error: { name: error.name, code: error.code },
       });
       expect(failed.timeline[0]).not.toHaveProperty("error.detail");
     }
   });
 
-  it("ignores a tool result with no matching call", () => {
-    const state = reduce(initialState, eventMsg("tool/result", {
+  it("appends a fully settled tool result with no matching call", () => {
+    const result = toolEventMsg("tool/result", {
       turn: 1,
       step: 1,
       message: {
@@ -595,14 +601,51 @@ describe("reduce", () => {
         content: [{
           type: "tool-result",
           toolCallId: "orphan",
-          content: [],
+          content: [{ type: "text", text: "failed output" }],
           isError: true,
         }],
       },
-      error: { name: "Error", code: "fail" },
+      error: { name: "Error", code: "fail", detail: "not retained" },
       meta: { path: "/x/orphan.ts", oldText: "a", newText: "b" },
-    }));
-    expect(state).toBe(initialState);
+    }, {
+      for: "result",
+      view: {
+        card: "diff",
+        title: "Failed edit",
+        diffs: [{ path: "/x/new.ts", oldText: null, newText: "new" }],
+      },
+    });
+    const state = reduce(initialState, result);
+    expect(state.timeline).toEqual([{
+      kind: "tool",
+      seq: 1,
+      callId: "orphan",
+      name: "tool",
+      argsRaw: "",
+      status: "error",
+      resultText: "failed output",
+      error: { name: "Error", code: "fail" },
+      resultView: {
+        card: "diff",
+        title: "Failed edit",
+        diffs: [{ path: "/x/new.ts", oldText: null, newText: "new" }],
+      },
+      diffs: [
+        { path: "/x/orphan.ts", oldText: "a", newText: "b" },
+        { path: "/x/new.ts", oldText: "", newText: "new" },
+      ],
+    }]);
+    expect(state.diffs).toEqual([
+      { path: "/x/orphan.ts", oldText: "a", newText: "b" },
+    ]);
+
+    const replayed = reduce(initialState, {
+      kind: "history",
+      sessionId: "s1",
+      events: [result.event],
+    });
+    expect(replayed.timeline).toEqual(state.timeline);
+    expect(replayed.diffs).toEqual([]);
   });
 
   it("keeps unparseable raw arguments without throwing", () => {

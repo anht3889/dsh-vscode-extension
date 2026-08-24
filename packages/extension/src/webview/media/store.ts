@@ -754,9 +754,15 @@ export function foldEvent(
       const resultText = messageText(result.content);
       const error = toolError(event.data.error);
       const failed = result.isError || record(event.data.error) !== undefined;
-      return updateTool(rows, result.callId, (row) => ({
+      const status =
+        error?.code === "interrupted"
+          ? "stopped"
+          : failed
+            ? "error"
+            : "ok";
+      return upsertTool(rows, result.callId, event.seq, (row) => ({
         ...row,
-        status: failed ? "error" : "ok",
+        status,
         ...(resultText === "" ? {} : { resultText }),
         ...(error === undefined ? {} : { error }),
         ...(resultView === undefined ? {} : { resultView }),
