@@ -340,20 +340,27 @@ interface ToolPresenterRegistry {
 
 type ToolCallArgs = { name: string; args: unknown };
 type ArgsFor = (callId: string) => ToolCallArgs | undefined;
+/** Resolved only for the two event types that can carry a view. */
+type PresenterLookup = () => ToolPresenterRegistry | undefined;
 
 /**
  * Compute a tool event's optional render intent. Missing services, definitions,
  * presenters, call pairings, malformed arguments, and presenter failures all
  * preserve event delivery by falling back to the generic client rendering.
+ *
+ * @param tools - presenter registry lookup, called only for tool events.
+ * @param event - the session event about to be serialized.
+ * @param argsFor - pairs a `tool/result` back to its call's name and arguments.
+ * @returns the render intent, or undefined for generic client rendering.
  */
 export function viewFor(
-  tools: ToolPresenterRegistry | undefined,
+  tools: PresenterLookup,
   event: SessionEvent,
   argsFor: ArgsFor,
 ): ToolEventView | undefined {
   try {
     if (event.type === "tool/call") {
-      const view = tools
+      const view = tools()
         ?.get(event.data.name)
         ?.presentCall?.(JSON.parse(event.data.arguments));
       return view === undefined ? undefined : { for: "call", view };
@@ -361,8 +368,10 @@ export function viewFor(
     if (event.type === "tool/result") {
       const call = argsFor(event.data.message.source.callId);
       if (call === undefined) return undefined;
+      // `ToolResultMessage.content` is the `[ToolResultBlock]` tuple dsh-llm
+      // mints, so the sole block is the payload a presenter reads.
       const [result] = event.data.message.content;
-      const view = tools?.get(call.name)?.presentResult?.(call.args, {
+      const view = tools()?.get(call.name)?.presentResult?.(call.args, {
         content: result.content,
         isError: result.isError === true,
         ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
@@ -377,15 +386,36 @@ export function viewFor(
   return undefined;
 }
 
-/** Serialize one event and attach its tool render intent when available. */
+/**
+ * Serialize one event and attach its tool render intent when available.
+ *
+ * @param event - the session event to serialize.
+ * @param tools - presenter registry lookup, called only for tool events.
+ * @param argsFor - pairs a `tool/result` back to its call's name and arguments.
+ * @returns the wire event, carrying `view` only when a presenter produced one.
+ */
 export function wireEvent(
   event: SessionEvent,
-  tools: ToolPresenterRegistry | undefined,
+  tools: PresenterLookup,
   argsFor: ArgsFor,
 ): SessionEventWire {
   const wire = toWire(event);
   const view = viewFor(tools, event, argsFor);
   return view === undefined ? wire : { ...wire, view };
+}
+
+function parseCallArgs(
+  event: Extract<SessionEvent, { type: "tool/call" }>,
+): ToolCallArgs | undefined {
+  try {
+    return {
+      name: event.data.name,
+      args: JSON.parse(event.data.arguments),
+    };
+  } catch {
+    // Unparseable model arguments cannot produce a presenter view.
+    return undefined;
+  }
 }
 
 function backscanArgs(
@@ -395,16 +425,28 @@ function backscanArgs(
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event?.type !== "tool/call" || event.data.callId !== callId) continue;
-    try {
-      return {
-        name: event.data.name,
-        args: JSON.parse(event.data.arguments),
-      };
-    } catch {
-      return undefined;
-    }
+    return parseCallArgs(event);
   }
   return undefined;
+}
+
+/**
+ * Index every `tool/call` in a history array once, so replaying N results does
+ * not rescan the log N times. A later call for the same id replaces an earlier
+ * one, matching the live backscan's last-write-wins pairing.
+ */
+function historyArgs(events: readonly SessionEvent[]): ArgsFor {
+  const calls = new Map<string, ToolCallArgs>();
+  for (const event of events) {
+    if (event.type !== "tool/call") continue;
+    const parsed = parseCallArgs(event);
+    if (parsed === undefined) {
+      calls.delete(event.data.callId);
+      continue;
+    }
+    calls.set(event.data.callId, parsed);
+  }
+  return (callId) => calls.get(callId);
 }
 
 function accumulateLiveArgs(
@@ -413,22 +455,34 @@ function accumulateLiveArgs(
   event: SessionEvent,
 ): void {
   if (event.type === "tool/call") {
-    try {
-      let sessionCalls = calls.get(session.id);
-      if (sessionCalls === undefined) {
-        sessionCalls = new Map();
-        calls.set(session.id, sessionCalls);
-      }
-      sessionCalls.set(event.data.callId, {
-        name: event.data.name,
-        args: JSON.parse(event.data.arguments),
-      });
-    } catch {
-      // Unparseable model arguments cannot produce a presenter view.
+    const parsed = parseCallArgs(event);
+    if (parsed === undefined) return;
+    let sessionCalls = calls.get(session.id);
+    if (sessionCalls === undefined) {
+      sessionCalls = new Map();
+      calls.set(session.id, sessionCalls);
     }
+    sessionCalls.set(event.data.callId, parsed);
   } else if (event.type === "turn/end") {
     calls.delete(session.id);
   }
+}
+
+/**
+ * Drop a settled call's arguments once its result has been serialized: a turn
+ * with many tool calls otherwise retains every one of them until `turn/end`.
+ * A later result for the same id still pairs through the session log.
+ */
+function releaseLiveArgs(
+  calls: Map<string, Map<string, ToolCallArgs>>,
+  session: Session,
+  event: SessionEvent,
+): void {
+  if (event.type !== "tool/result") return;
+  const sessionCalls = calls.get(session.id);
+  if (sessionCalls === undefined) return;
+  sessionCalls.delete(event.data.message.source.callId);
+  if (sessionCalls.size === 0) calls.delete(session.id);
 }
 
 /**
@@ -468,12 +522,13 @@ export async function runVscode(
       sessionId: session.id,
       event: wireEvent(
         event,
-        ctx.get("tools"),
+        () => ctx.get("tools"),
         (callId) =>
           openCalls.get(session.id)?.get(callId) ??
           backscanArgs(session.events, callId),
       ),
     };
+    releaseLiveArgs(openCalls, session, event);
     io.send(out);
   });
 
@@ -591,12 +646,13 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       sessionId: session.id,
       event: wireEvent(
         event,
-        ctx.get("tools"),
+        () => ctx.get("tools"),
         (callId) =>
           openCalls.get(session.id)?.get(callId) ??
           backscanArgs(session.events, callId),
       ),
     };
+    releaseLiveArgs(openCalls, session, event);
     io.send(out);
   });
 
@@ -704,16 +760,12 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       createdAt: session.header.createdAt,
     });
     if (includeHistory) {
+      const argsFor = historyArgs(session.events);
+      const tools = (): ToolPresenterRegistry | undefined => ctx.get("tools");
       io.send({
         kind: "history",
         sessionId: session.id,
-        events: session.events.map((event) =>
-          wireEvent(
-            event,
-            ctx.get("tools"),
-            (callId) => backscanArgs(session.events, callId),
-          ),
-        ),
+        events: session.events.map((event) => wireEvent(event, tools, argsFor)),
       });
     }
     io.send({
@@ -776,6 +828,10 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       await next.handle.agent.whenIdle();
       await emitLiveSession(next, true);
       throw error;
+    } finally {
+      // The retired session emits nothing further, so its open calls are dead
+      // either way.
+      openCalls.delete(previous.handle.agent.session.id);
     }
     live = next;
     slashCatalog = createLiveSlashCatalog();

@@ -163,6 +163,41 @@ describe("runVscode", () => {
     expect(idle && idle.kind === "status" && idle.state).toBe("idle");
   }, 60_000);
 
+  it("releases accumulated arguments once a call's result is relayed", async () => {
+    const messages: OutboundMessage[] = [];
+    const ctx = await bootTree({
+      baseURL: mock.baseURL,
+      provider: "deepseek-official",
+      model: "mock-model",
+    });
+    installBashPresenter(ctx);
+    try {
+      await runVscode(ctx, capture(messages), "say hello");
+      const session = ctx.get("sessions")?.list()[0];
+      if (session === undefined) throw new Error("session was not created");
+      const start = messages.length;
+
+      ctx.emit("session/event", session, toolCallEvent(110, "settled"));
+      ctx.emit("session/event", session, toolResultEvent(111, "settled"));
+      // Nothing appended the call to the session log, so a repeat result has no
+      // remaining pairing once the settled call has been released.
+      ctx.emit("session/event", session, toolResultEvent(112, "settled"));
+
+      const events = emittedEvents(messages, start);
+      expect(events[1]?.event.view).toEqual({
+        for: "result",
+        view: {
+          card: "terminal",
+          output: "completed: echo hi",
+          exitCode: 0,
+        },
+      });
+      expect(events[2]?.event.view).toBeUndefined();
+    } finally {
+      await ctx.fiber.dispose();
+    }
+  }, 60_000);
+
   it("enriches live tool events from accumulated arguments and clears them at turn end", async () => {
     const messages: OutboundMessage[] = [];
     const ctx = await bootTree({
@@ -230,15 +265,20 @@ describe("toWire", () => {
 });
 
 describe("viewFor", () => {
-  const tools = {
+  const registry = {
     get(name: string) {
       if (name !== "bash") return undefined;
       return {
         presentCall: (args: unknown) => ({ card: "terminal" as const, title: "echo hi", description: "Say hi" }),
-        presentResult: () => ({ card: "terminal" as const, output: "hi\n", exitCode: 0 }),
+        presentResult: (_args: unknown, result: { content: unknown }) => ({
+          card: "terminal" as const,
+          output: JSON.stringify(result.content),
+          exitCode: 0,
+        }),
       };
     },
   };
+  const tools = () => registry;
 
   it("attaches a call view", () => {
     expect(viewFor(tools, toolCallEvent(1, "c1"), () => undefined)).toEqual({
@@ -253,14 +293,57 @@ describe("viewFor", () => {
       args: { command: "echo hi" },
     }))).toEqual({
       for: "result",
-      view: { card: "terminal", output: "hi\n", exitCode: 0 },
+      view: { card: "terminal", output: "[]", exitCode: 0 },
     });
   });
 
+  it("passes the tool-result block's payload to the presenter", () => {
+    const event = toolResultEvent(2, "c1");
+    const withPayload: typeof event = {
+      ...event,
+      data: {
+        ...event.data,
+        message: createToolResultMessage({
+          callId: CallId("c1"),
+          content: [{ type: "text", text: "hi\n" }],
+          isError: false,
+        }),
+      },
+    };
+    expect(viewFor(tools, withPayload, () => ({
+      name: "bash",
+      args: { command: "echo hi" },
+    }))).toEqual({
+      for: "result",
+      view: {
+        card: "terminal",
+        output: JSON.stringify([{ type: "text", text: "hi\n" }]),
+        exitCode: 0,
+      },
+    });
+  });
+
+  it("does not look up presenters for an event that cannot carry a view", () => {
+    let lookups = 0;
+    const counted = () => {
+      lookups += 1;
+      return registry;
+    };
+    expect(
+      viewFor(counted, {
+        type: "turn/end",
+        seq: 1,
+        time: 0,
+        data: { turn: 1, reason: { kind: "completed" } },
+      }, () => undefined),
+    ).toBeUndefined();
+    expect(lookups).toBe(0);
+  });
+
   it("omits view when tools is missing, pairing fails, JSON is bad, or the presenter throws", () => {
-    expect(viewFor(undefined, toolCallEvent(1, "c1", "{"), () => undefined)).toBeUndefined();
+    expect(viewFor(() => undefined, toolCallEvent(1, "c1", "{"), () => undefined)).toBeUndefined();
     expect(viewFor(tools, toolResultEvent(2, "missing"), () => undefined)).toBeUndefined();
-    const boom = { get: () => ({ presentCall: () => { throw new Error("nope"); } }) };
+    const boom = () => ({ get: () => ({ presentCall: () => { throw new Error("nope"); } }) });
     expect(viewFor(boom, toolCallEvent(1, "c1", "{}"), () => undefined)).toBeUndefined();
   });
 });
@@ -272,7 +355,7 @@ it("wireEvent adds view only when viewFor returns one", () => {
     time: 0,
     data: { turn: 1, reason: { kind: "completed" } },
   };
-  expect(wireEvent(event, undefined, () => undefined).view).toBeUndefined();
+  expect(wireEvent(event, () => undefined, () => undefined).view).toBeUndefined();
 });
 
 it("enriches retained live events and reconstructs history arguments by backscan", async () => {
