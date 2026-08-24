@@ -107,6 +107,7 @@ export type TimelineRow =
       argsRaw: string;
       status: "running" | "ok" | "error" | "stopped";
       resultText?: string;
+      error?: { name?: string; code?: string };
       callView?: ToolCallView;
       resultView?: ToolResultView;
       diffs: ToolDiff[];
@@ -461,24 +462,32 @@ function upsertTool(
   seq: number,
   update: (row: ToolTimelineRow) => ToolTimelineRow,
 ): TimelineRow[] {
+  const updated = updateTool(rows, callId, update);
+  if (updated !== rows) return updated;
+  return [
+    ...rows,
+    update({
+      kind: "tool",
+      seq,
+      callId,
+      name: "tool",
+      argsRaw: "",
+      status: "running",
+      diffs: [],
+    }),
+  ];
+}
+
+function updateTool(
+  rows: TimelineRow[],
+  callId: string,
+  update: (row: ToolTimelineRow) => ToolTimelineRow,
+): TimelineRow[] {
   const index = lastRowIndex(
     rows,
     (row) => row.kind === "tool" && row.callId === callId,
   );
-  if (index < 0) {
-    return [
-      ...rows,
-      update({
-        kind: "tool",
-        seq,
-        callId,
-        name: "tool",
-        argsRaw: "",
-        status: "running",
-        diffs: [],
-      }),
-    ];
-  }
+  if (index < 0) return rows;
   const row = rows[index]!;
   if (row.kind !== "tool") return rows;
   return [
@@ -486,6 +495,18 @@ function upsertTool(
     update(row),
     ...rows.slice(index + 1),
   ];
+}
+
+function toolError(value: unknown): ToolTimelineRow["error"] {
+  const source = record(value);
+  if (source === undefined) return undefined;
+  const name = typeof source.name === "string" ? source.name : undefined;
+  const code = typeof source.code === "string" ? source.code : undefined;
+  if (name === undefined && code === undefined) return undefined;
+  return {
+    ...(name === undefined ? {} : { name }),
+    ...(code === undefined ? {} : { code }),
+  };
 }
 
 function toolResultBlock(event: SessionEventWire): {
@@ -730,11 +751,13 @@ export function foldEvent(
         ...diffsFromResultView(resultView),
       ];
       const resultText = messageText(result.content);
+      const error = toolError(event.data.error);
       const failed = result.isError || record(event.data.error) !== undefined;
-      return upsertTool(rows, result.callId, event.seq, (row) => ({
+      return updateTool(rows, result.callId, (row) => ({
         ...row,
         status: failed ? "error" : "ok",
         ...(resultText === "" ? {} : { resultText }),
+        ...(error === undefined ? {} : { error }),
         ...(resultView === undefined ? {} : { resultView }),
         diffs,
       }));
@@ -1460,8 +1483,8 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
           };
         }
         if (type === "tool/result") {
+          if (timeline === state.timeline) return state;
           const diff = diffFromEventData(msg.event.data);
-          if (timeline === state.timeline && diff === undefined) return state;
           return {
             ...state,
             timeline,

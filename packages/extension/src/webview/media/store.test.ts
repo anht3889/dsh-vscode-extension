@@ -534,10 +534,10 @@ describe("reduce", () => {
     expect(done.diffs).toEqual([]);
   });
 
-  it("keeps interrupted and failed tool results as errors", () => {
+  it("keeps interrupted and failed tool result name and code", () => {
     for (const error of [
       { name: "AbortError", code: "interrupted" },
-      { name: "Error", code: "fail" },
+      { name: "Error", code: "fail", detail: "not retained" },
     ]) {
       const running = reduce(initialState, eventMsg("tool/call", {
         turn: 1,
@@ -562,11 +562,16 @@ describe("reduce", () => {
         },
         error,
       }));
-      expect(failed.timeline[0]).toMatchObject({ kind: "tool", status: "error" });
+      expect(failed.timeline[0]).toMatchObject({
+        kind: "tool",
+        status: "error",
+        error: { name: error.name, code: error.code },
+      });
+      expect(failed.timeline[0]).not.toHaveProperty("error.detail");
     }
   });
 
-  it("appends a settled tool when result has no matching call", () => {
+  it("ignores a tool result with no matching call", () => {
     const state = reduce(initialState, eventMsg("tool/result", {
       turn: 1,
       step: 1,
@@ -582,13 +587,9 @@ describe("reduce", () => {
         }],
       },
       error: { name: "Error", code: "fail" },
+      meta: { path: "/x/orphan.ts", oldText: "a", newText: "b" },
     }));
-    expect(state.timeline[0]).toMatchObject({
-      kind: "tool",
-      callId: "orphan",
-      name: "tool",
-      status: "error",
-    });
+    expect(state).toBe(initialState);
   });
 
   it("keeps unparseable raw arguments without throwing", () => {
@@ -652,9 +653,29 @@ describe("reduce", () => {
 
   it("preserves chat history and resets diffs on turn/start", () => {
     const withText = reduce(initialState, assistantMessage("previous turn"));
+    const running = reduce(withText, eventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "edit",
+      arguments: "{}",
+    }));
     const withDiffs = reduce(
-      withText,
+      running,
       eventMsg("tool/result", {
+        turn: 1,
+        step: 1,
+        message: {
+          id: "m1",
+          role: "user",
+          source: { kind: "tool", callId: "c1" },
+          content: [{
+            type: "tool-result",
+            toolCallId: "c1",
+            content: [],
+            isError: false,
+          }],
+        },
         meta: { path: "/x/a.ts", oldText: "a", newText: "b" },
       }),
     );
@@ -664,6 +685,15 @@ describe("reduce", () => {
     expect(s.diffs).toEqual([]);
     expect(s.timeline).toEqual([
       { kind: "assistant", seq: 1, text: "previous turn", streaming: false },
+      {
+        kind: "tool",
+        seq: 1,
+        callId: "c1",
+        name: "edit",
+        argsRaw: "{}",
+        status: "ok",
+        diffs: [{ path: "/x/a.ts", oldText: "a", newText: "b" }],
+      },
     ]);
     expect(s.status).toBe("thinking");
   });
