@@ -72,7 +72,35 @@ export interface McpManagementService {
   clearOAuth(id: string): Promise<void>;
   setSecrets(id: string, secrets: Record<string, string>): Promise<void>;
   describeSecrets?(id: string): Promise<Record<string, { configured: boolean }>>;
+  /**
+   * Resolve OAuth endpoints from an MCP HTTP URL, registering a client when the
+   * authorization server advertises a registration endpoint.
+   *
+   * Optional because the MCP capability seam does not declare it: only a
+   * provider whose concrete runtime implements discovery exposes it here.
+   */
+  discoverOAuth?(serverUrl: string): Promise<McpOAuthDiscoveryLike>;
+  /** Start authorization for one configured OAuth server. */
+  startOAuth?(id: string): Promise<{ authorizeUrl: string }>;
+  /**
+   * Return the callback origin when this profile has a listening HTTP server.
+   */
+  oauthRedirectOrigin?():
+    | string
+    | undefined
+    | Promise<string | undefined>;
   onCatalogChanged?(listener: () => void): () => void;
+}
+
+/** Structural view of one plugin OAuth discovery result. */
+export interface McpOAuthDiscoveryLike {
+  clientId: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  scopes: string[];
+  /** Present only when Dynamic Client Registration issued one. */
+  clientSecret?: string;
+  registered: boolean;
 }
 
 export interface WebSearchCatalogLike {

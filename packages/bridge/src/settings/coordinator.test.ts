@@ -2060,6 +2060,152 @@ describe("settings coordinator", () => {
     await ctx.fiber.dispose();
   });
 
+  it("returns settings-unavailable for OAuth discovery without a service", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.discoverMcpOAuth({
+      kind: "discoverMcpOAuth",
+      requestId: "missing",
+      url: "https://mcp.example/rpc",
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpOAuthDiscovery",
+      requestId: "missing",
+      result: {
+        ok: false,
+        error: {
+          code: "settings-unavailable",
+          message: "MCP settings are not available",
+        },
+      },
+    }]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("returns discovered OAuth endpoints and reports an unsupported plugin", async () => {
+    const ctx = new Context();
+    ctx.provide("mcp", mcpService({
+      discoverOAuth: async () => ({
+        clientId: "issued",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: ["docs:read"],
+        registered: true,
+      }),
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.discoverMcpOAuth({
+      kind: "discoverMcpOAuth",
+      requestId: "found",
+      url: "https://mcp.example/rpc",
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpOAuthDiscovery",
+      requestId: "found",
+      result: {
+        ok: true,
+        discovery: {
+          clientId: "issued",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: ["docs:read"],
+          registered: true,
+          clientSecretIssued: false,
+        },
+      },
+    }]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("reports a plugin without a discovery entry point as mcp-rejected", async () => {
+    const ctx = new Context();
+    ctx.provide("mcp", mcpService() as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.discoverMcpOAuth({
+      kind: "discoverMcpOAuth",
+      requestId: "unsupported",
+      url: "https://mcp.example/rpc",
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpOAuthDiscovery",
+      requestId: "unsupported",
+      result: {
+        ok: false,
+        error: {
+          code: "mcp-rejected",
+          message: "The mounted MCP plugin does not support OAuth discovery",
+        },
+      },
+    }]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("keeps only the latest OAuth discovery reply", async () => {
+    const ctx = new Context();
+    const first = deferred<void>();
+    let calls = 0;
+    ctx.provide("mcp", mcpService({
+      discoverOAuth: async () => {
+        if (calls++ === 0) await first.promise;
+        return {
+          clientId: "issued",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: [],
+          registered: false,
+        };
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.discoverMcpOAuth({
+      kind: "discoverMcpOAuth",
+      requestId: "stale",
+      url: "https://mcp.example/rpc",
+    });
+    coordinator.discoverMcpOAuth({
+      kind: "discoverMcpOAuth",
+      requestId: "fresh",
+      url: "https://mcp.example/rpc",
+    });
+    await flush();
+    first.resolve(undefined);
+    await flush();
+
+    expect(messages.filter((message) => message.kind === "mcpOAuthDiscovery"))
+      .toEqual([expect.objectContaining({ requestId: "fresh" })]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
   it("returns settings-unavailable for a structurally incomplete MCP service", async () => {
     const ctx = new Context();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2178,6 +2324,173 @@ describe("settings coordinator", () => {
 
     expect(messages.filter((message) => message.kind === "mcpOperation"))
       .toEqual([expect.objectContaining({ requestId: "new" })]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("uses one latest-request key for OAuth provisions", async () => {
+    const ctx = new Context();
+    const first = deferred<void>();
+    let discoveries = 0;
+    const records = new Map<string, McpServerRecordLike>();
+    ctx.provide("mcp", mcpService({
+      list: () => [...records.values()],
+      get: (id) => records.get(id),
+      discoverOAuth: async () => {
+        if (discoveries++ === 0) await first.promise;
+        return {
+          clientId: "issued",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: [],
+          registered: true,
+        };
+      },
+      oauthRedirectOrigin: () => "http://127.0.0.1:9",
+      upsert: async (record) => {
+        records.set(record.id, record);
+        return record;
+      },
+      startOAuth: async () => ({
+        authorizeUrl: "https://auth.example/authorize?client_id=issued",
+      }),
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+    const provision = (requestId: string, serverName: string) =>
+      coordinator.runMcpOperation({
+        kind: "runMcpOperation",
+        requestId,
+        operation: {
+          kind: "provisionOAuthServer",
+          serverName,
+          url: "https://mcp.example/rpc",
+          enabled: true,
+        },
+      });
+
+    provision("old", "Old");
+    provision("new", "New");
+    await flush();
+    first.resolve(undefined);
+    await flush();
+
+    expect(messages.filter((message) => message.kind === "mcpOperation"))
+      .toEqual([{
+        kind: "mcpOperation",
+        requestId: "new",
+        result: {
+          ok: true,
+          detail: expect.objectContaining({
+            server: expect.objectContaining({ serverName: "New" }),
+          }),
+          authorizeUrl: "https://auth.example/authorize?client_id=issued",
+        },
+      }]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("allows OAuth provision and a named-server operation to overlap", async () => {
+    const ctx = new Context();
+    const discovery = deferred<void>();
+    const records = new Map([["server-1", mcpRecord()]]);
+    const connect = vi.fn(async () => {});
+    ctx.provide("mcp", mcpService({
+      list: () => [...records.values()],
+      get: (id) => records.get(id),
+      discoverOAuth: async () => {
+        await discovery.promise;
+        return {
+          clientId: "issued",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: [],
+          registered: true,
+        };
+      },
+      oauthRedirectOrigin: () => "http://127.0.0.1:9",
+      upsert: async (record) => {
+        records.set(record.id, record);
+        return record;
+      },
+      startOAuth: async () => ({
+        authorizeUrl: "https://auth.example/authorize",
+      }),
+      connect,
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "provision",
+      operation: {
+        kind: "provisionOAuthServer",
+        serverName: "New",
+        url: "https://mcp.example/rpc",
+        enabled: true,
+      },
+    });
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "connect",
+      operation: { kind: "connectServer", serverId: "server-1" },
+    });
+    await flush();
+
+    expect(connect).toHaveBeenCalledWith("server-1");
+    expect(messages).toContainEqual(expect.objectContaining({
+      kind: "mcpOperation",
+      requestId: "connect",
+    }));
+    discovery.resolve(undefined);
+    await flush();
+    expect(messages).toContainEqual(expect.objectContaining({
+      kind: "mcpOperation",
+      requestId: "provision",
+    }));
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("rejects startOAuth when the plugin has no loopback origin", async () => {
+    const ctx = new Context();
+    const startOAuth = vi.fn(async () => ({
+      authorizeUrl: "https://auth.example/authorize",
+    }));
+    ctx.provide("mcp", mcpService({ startOAuth }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "authorize",
+      operation: { kind: "startOAuth", serverId: "server-1" },
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpOperation",
+      requestId: "authorize",
+      result: {
+        ok: false,
+        error: {
+          code: "mcp-rejected",
+          message: "The mounted MCP plugin cannot authorize OAuth servers in this profile",
+        },
+      },
+    }]);
+    expect(startOAuth).not.toHaveBeenCalled();
     coordinator.dispose();
     await ctx.fiber.dispose();
   });

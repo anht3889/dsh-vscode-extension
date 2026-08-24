@@ -16,6 +16,7 @@ import {
   MAX_WIRE_URL_LENGTH,
   type McpAuthWire,
   type McpLogEntryWire,
+  type McpOAuthDiscoveryWire,
   type McpOperationWire,
   type McpServerDetailWire,
   type McpServerInputWire,
@@ -55,6 +56,8 @@ const OAUTH_WRITABLE_SECRET_NAMES = ["OAUTH_CLIENT_SECRET"] as const;
 export interface McpOperationOutcome {
   /** Absent only for a completed `removeServer`. */
   detail?: McpServerDetailWire;
+  /** Present when the caller must open an OAuth authorization page. */
+  authorizeUrl?: string;
 }
 
 interface McpOperationIds {
@@ -469,6 +472,72 @@ async function runPluginOperation<T>(
   }
 }
 
+async function oauthRedirectOrigin(
+  service: McpManagementService,
+): Promise<string | undefined> {
+  try {
+    return await service.oauthRedirectOrigin?.();
+  } catch {
+    return undefined;
+  }
+}
+
+async function setSecretsWithoutPluginText(
+  service: McpManagementService,
+  serverId: string,
+  secrets: Record<string, string>,
+  names: readonly string[],
+): Promise<void> {
+  try {
+    await service.setSecrets(serverId, secrets);
+  } catch {
+    throw new Error(
+      `Could not store MCP secrets for server "${serverId}": ${names.join(", ")}`,
+    );
+  }
+}
+
+function assertOAuthDiscovery(
+  discovered: {
+    clientId: unknown;
+    authorizeUrl: unknown;
+    tokenUrl: unknown;
+    scopes: unknown;
+    registered: unknown;
+  },
+): void {
+  assertString(
+    discovered.clientId,
+    MAX_WIRE_IDENTIFIER_LENGTH,
+    "Discovered OAuth client id",
+    true,
+  );
+  assertString(
+    discovered.authorizeUrl,
+    MAX_WIRE_URL_LENGTH,
+    "Discovered OAuth authorize URL",
+  );
+  assertString(
+    discovered.tokenUrl,
+    MAX_WIRE_URL_LENGTH,
+    "Discovered OAuth token URL",
+  );
+  if (!Array.isArray(discovered.scopes)) {
+    throw new TypeError("Discovered OAuth scopes must be an array");
+  }
+  assertCollectionCap(
+    discovered.scopes,
+    MAX_MCP_SCOPES,
+    "Discovered OAuth scopes",
+  );
+  for (const scope of discovered.scopes) {
+    assertString(scope, MAX_WIRE_IDENTIFIER_LENGTH, "Discovered OAuth scope");
+  }
+  if (typeof discovered.registered !== "boolean") {
+    throw new TypeError("Discovered OAuth registration state must be a boolean");
+  }
+}
+
 /**
  * Apply one MCP mutation against a freshly probed service and return fresh,
  * bounded detail unless the server was removed.
@@ -558,22 +627,121 @@ export async function runMcpOperation(
         ));
       }
       const names = operation.secrets.map(({ name }) => name);
-      try {
-        await service.setSecrets(
-          operation.serverId,
-          Object.fromEntries(
-            operation.secrets.map(({ name, value }) => [name, value]),
-          ),
-        );
-      } catch {
-        throw new Error(
-          `Could not store MCP secrets for server "${operation.serverId}": ${
-            names.join(", ")
-          }`,
-        );
-      }
+      await setSecretsWithoutPluginText(
+        service,
+        operation.serverId,
+        Object.fromEntries(
+          operation.secrets.map(({ name, value }) => [name, value]),
+        ),
+        names,
+      );
       serverId = operation.serverId;
       break;
+    }
+    case "provisionOAuthServer": {
+      const origin = await oauthRedirectOrigin(service);
+      const discover = service.discoverOAuth;
+      const startOAuth = service.startOAuth;
+      if (
+        origin === undefined
+        || origin.length === 0
+        || discover === undefined
+        || startOAuth === undefined
+      ) {
+        throw new Error(
+          "The mounted MCP plugin cannot authorize OAuth servers in this profile",
+        );
+      }
+      const discovered = await runPluginOperation(
+        () => discover.call(service, operation.url),
+        `OAuth discovery for ${operation.url} failed`,
+      );
+      assertOAuthDiscovery(discovered);
+      if (discovered.clientId.length === 0) {
+        throw new Error(
+          "OAuth discovery did not register a client. Open Advanced and enter a Client ID, or retry after the loopback origin is available.",
+        );
+      }
+      const record = composeRecord(
+        service,
+        {
+          serverName: operation.serverName,
+          enabled: operation.enabled,
+          transport: "streamable-http",
+          url: operation.url,
+          auth: {
+            kind: "oauth",
+            clientId: discovered.clientId,
+            authorizeUrl: discovered.authorizeUrl,
+            tokenUrl: discovered.tokenUrl,
+            scopes: [...discovered.scopes],
+            redirectPath: "/callback",
+          },
+          toolCallTimeoutMs: 30_000,
+          reconnect: {
+            enabled: true,
+            initialDelayMs: 1_000,
+            maxDelayMs: 30_000,
+            maxAttempts: 5,
+          },
+        },
+        ids,
+      );
+      await runPluginOperation(
+        () => service.upsert(record),
+        `MCP server "${record.id}" was rejected`,
+      );
+      if (
+        typeof discovered.clientSecret === "string"
+        && discovered.clientSecret.length > 0
+      ) {
+        await setSecretsWithoutPluginText(
+          service,
+          record.id,
+          { OAUTH_CLIENT_SECRET: discovered.clientSecret },
+          ["OAUTH_CLIENT_SECRET"],
+        );
+      }
+      const authorization = await runPluginOperation(
+        () => startOAuth.call(service, record.id),
+        `OAuth authorization for MCP server "${record.id}" could not start`,
+      );
+      assertString(
+        authorization.authorizeUrl,
+        MAX_WIRE_URL_LENGTH,
+        "OAuth authorize URL",
+      );
+      return {
+        detail: await buildMcpDetail(ctx, record.id),
+        authorizeUrl: authorization.authorizeUrl,
+      };
+    }
+    case "startOAuth": {
+      requireRecord(service, operation.serverId);
+      const origin = await oauthRedirectOrigin(service);
+      const startOAuth = service.startOAuth;
+      if (
+        origin === undefined
+        || origin.length === 0
+        || startOAuth === undefined
+      ) {
+        throw new Error(
+          "The mounted MCP plugin cannot authorize OAuth servers in this profile",
+        );
+      }
+      const authorization = await runPluginOperation(
+        () => startOAuth.call(service, operation.serverId),
+        `OAuth authorization for MCP server "${operation.serverId}" could not start`,
+      );
+      assertString(
+        authorization.authorizeUrl,
+        MAX_WIRE_URL_LENGTH,
+        "OAuth authorize URL",
+      );
+      return {
+        detail: await buildMcpDetail(ctx, operation.serverId),
+        authorizeUrl: authorization.authorizeUrl,
+      };
     }
     case "clearOAuthTokens":
       requireRecord(service, operation.serverId);
@@ -593,6 +761,13 @@ export async function runMcpOperation(
 export async function buildMcpView(ctx: Context): Promise<McpSettingsView> {
   const service = requireMcp(ctx);
   const records = service.list();
+  const origin = await oauthRedirectOrigin(service);
+  const canAuthorize = typeof service.startOAuth === "function"
+    && typeof origin === "string"
+    && origin.length > 0;
+  const discovery = service.discoverOAuth === undefined
+    ? "unavailable"
+    : "available";
   assertCollectionCap(records, MAX_MCP_SERVERS, "MCP servers");
   const view: McpSettingsView = {
     section: "mcp",
@@ -609,7 +784,19 @@ export async function buildMcpView(ctx: Context): Promise<McpSettingsView> {
     secretStates: service.describeSecrets === undefined
       ? "unavailable"
       : "available",
-    oauth: { kind: "manual", reason: "no-callback-origin" },
+    oauth: canAuthorize
+      ? {
+          kind: "loopback",
+          origin,
+          discovery,
+          authorization: "available",
+        }
+      : {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery,
+          authorization: "unavailable",
+        },
   };
   assertBounded(
     view,
@@ -678,6 +865,53 @@ export async function buildMcpDetail(
     "MCP server detail",
   );
   return detail;
+}
+
+/**
+ * Resolve OAuth endpoints for one MCP HTTP URL through the mounted plugin.
+ *
+ * A Dynamic Client Registration secret is reported, never forwarded: the
+ * outbound contract carries no credential value, so an operator re-enters the
+ * secret through the editor's write-only field.
+ *
+ * @param ctx - context holding the optional MCP service.
+ * @param url - streamable-http MCP server URL to discover against.
+ * @returns the bounded non-secret discovery projection.
+ * @throws when no service is mounted, the plugin exposes no discovery entry
+ *   point, or the resolved endpoints exceed the wire caps.
+ */
+export async function discoverMcpOAuth(
+  ctx: Context,
+  url: string,
+): Promise<McpOAuthDiscoveryWire> {
+  const service = requireMcp(ctx);
+  const discover = service.discoverOAuth;
+  if (discover === undefined) {
+    throw new Error(
+      "The mounted MCP plugin does not support OAuth discovery",
+    );
+  }
+  const discovered = await runPluginOperation(
+    () => discover.call(service, url),
+    `OAuth discovery for ${url} failed`,
+  );
+  assertOAuthDiscovery(discovered);
+  const discovery: McpOAuthDiscoveryWire = {
+    clientId: discovered.clientId,
+    authorizeUrl: discovered.authorizeUrl,
+    tokenUrl: discovered.tokenUrl,
+    scopes: [...discovered.scopes],
+    registered: discovered.registered,
+    clientSecretIssued: typeof discovered.clientSecret === "string"
+      && discovered.clientSecret.length > 0,
+  };
+  assertBounded(
+    discovery,
+    MAX_MCP_DETAIL_NODES,
+    MAX_MCP_VIEW_DEPTH,
+    "MCP OAuth discovery",
+  );
+  return discovery;
 }
 
 function projectLogEntry(entry: McpLogEntryLike): McpLogEntryWire {

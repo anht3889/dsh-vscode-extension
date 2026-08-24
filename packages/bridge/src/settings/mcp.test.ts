@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMcpDetail,
   buildMcpView,
+  discoverMcpOAuth,
   projectMcpServer,
   projectMcpStatus,
   readMcpLogs,
@@ -104,7 +105,94 @@ describe("MCP read projection", () => {
         disabledToolCount: 1,
       }],
       secretStates: "available",
-      oauth: { kind: "manual", reason: "no-callback-origin" },
+      oauth: {
+        kind: "manual",
+        reason: "no-callback-origin",
+        discovery: "unavailable",
+        authorization: "unavailable",
+      },
+    });
+  });
+
+  it("reports OAuth discovery as reachable only when the plugin exposes it", async () => {
+    await expect(
+      buildMcpView(contextWith(fakeService())),
+    ).resolves.toMatchObject({
+      oauth: {
+        kind: "manual",
+        reason: "no-callback-origin",
+        discovery: "unavailable",
+        authorization: "unavailable",
+      },
+    });
+    await expect(
+      buildMcpView(contextWith(fakeService({
+        discoverOAuth: async () => ({
+          clientId: "",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: [],
+          registered: false,
+        }),
+      }))),
+    ).resolves.toMatchObject({
+      oauth: {
+        kind: "manual",
+        reason: "no-callback-origin",
+        discovery: "available",
+        authorization: "unavailable",
+      },
+    });
+  });
+
+  it("projects loopback OAuth support when authorization is available", async () => {
+    const oauthRedirectOrigin = vi.fn(
+      () => "http://127.0.0.1:54321",
+    );
+
+    await expect(buildMcpView(contextWith(fakeService({
+      discoverOAuth: async () => ({
+        clientId: "client",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: [],
+        registered: true,
+      }),
+      startOAuth: async () => ({
+        authorizeUrl: "https://auth.example/authorize?client_id=client",
+      }),
+      oauthRedirectOrigin,
+    })))).resolves.toMatchObject({
+      oauth: {
+        kind: "loopback",
+        origin: "http://127.0.0.1:54321",
+        discovery: "available",
+        authorization: "available",
+      },
+    });
+    expect(oauthRedirectOrigin).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["method missing", {}],
+    ["origin missing", { oauthRedirectOrigin: () => undefined }],
+    ["origin probe throws", {
+      oauthRedirectOrigin: () => {
+        throw new Error("no listener");
+      },
+    }],
+  ])("projects manual OAuth support when the %s", async (_label, overrides) => {
+    await expect(buildMcpView(contextWith(fakeService({
+      startOAuth: async () => ({
+        authorizeUrl: "https://auth.example/authorize",
+      }),
+      ...overrides,
+    })))).resolves.toMatchObject({
+      oauth: {
+        kind: "manual",
+        reason: "no-callback-origin",
+        authorization: "unavailable",
+      },
     });
   });
 
@@ -1060,7 +1148,7 @@ describe("MCP mutations", () => {
     })).rejects.toThrow("x".repeat(512));
   });
 
-  it("never calls OAuth authorization or discovery surfaces", async () => {
+  it("never calls OAuth authorization surfaces from a record operation", async () => {
     const clearOAuth = vi.fn(async () => {});
     const startOAuth = vi.fn();
     const discoverOAuth = vi.fn();
@@ -1078,5 +1166,288 @@ describe("MCP mutations", () => {
     expect(clearOAuth).toHaveBeenCalledWith("server-1");
     expect(startOAuth).not.toHaveBeenCalled();
     expect(discoverOAuth).not.toHaveBeenCalled();
+  });
+
+  it("refuses provision when discovery returns no client id", async () => {
+    const upsert = vi.fn();
+    const startOAuth = vi.fn();
+
+    await expect(runMcpOperation(contextWith(fakeService({
+      upsert,
+      startOAuth,
+      oauthRedirectOrigin: () => "http://127.0.0.1:9",
+      discoverOAuth: async () => ({
+        clientId: "",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: [],
+        registered: false,
+      }),
+    })), {
+      kind: "provisionOAuthServer",
+      serverName: "Glean",
+      url: "https://mcp.example/rpc",
+      enabled: true,
+    })).rejects.toThrow(
+      "OAuth discovery did not register a client. Open Advanced and enter a Client ID, or retry after the loopback origin is available.",
+    );
+    expect(upsert).not.toHaveBeenCalled();
+    expect(startOAuth).not.toHaveBeenCalled();
+  });
+
+  it("provisions OAuth and returns its authorize URL without its secret", async () => {
+    let stored: McpServerRecordLike | undefined;
+    const calls: string[] = [];
+    const upsert = vi.fn(async (record: McpServerRecordLike) => {
+      calls.push("upsert");
+      stored = record;
+      return record;
+    });
+    const setSecrets = vi.fn(async () => {
+      calls.push("setSecrets");
+    });
+    const startOAuth = vi.fn(async () => {
+      calls.push("startOAuth");
+      return {
+        authorizeUrl: "https://auth.example/authorize?client_id=issued",
+      };
+    });
+
+    const outcome = await runMcpOperation(contextWith(fakeService({
+      list: () => stored === undefined ? [] : [stored],
+      get: (id) => stored?.id === id ? stored : undefined,
+      upsert,
+      setSecrets,
+      startOAuth,
+      oauthRedirectOrigin: () => "http://127.0.0.1:9",
+      discoverOAuth: async () => {
+        calls.push("discoverOAuth");
+        return {
+          clientId: "issued",
+          authorizeUrl: "https://auth.example/authorize",
+          tokenUrl: "https://auth.example/token",
+          scopes: ["mcp"],
+          registered: true,
+          clientSecret: "dynamic-secret",
+        };
+      },
+    })), {
+      kind: "provisionOAuthServer",
+      serverName: "Glean",
+      url: "https://mcp.example/rpc",
+      enabled: true,
+    }, {
+      newId: () => "new-id",
+      now: () => "now",
+    });
+
+    expect(stored).toEqual(expect.objectContaining({
+      id: "new-id",
+      serverName: "Glean",
+      enabled: true,
+      transport: "streamable-http",
+      url: "https://mcp.example/rpc",
+      auth: {
+        kind: "oauth",
+        clientId: "issued",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: ["mcp"],
+        redirectPath: "/callback",
+      },
+      toolCallTimeoutMs: 30_000,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 1_000,
+        maxDelayMs: 30_000,
+        maxAttempts: 5,
+      },
+    }));
+    expect(setSecrets).toHaveBeenCalledWith("new-id", {
+      OAUTH_CLIENT_SECRET: "dynamic-secret",
+    });
+    expect(startOAuth).toHaveBeenCalledWith("new-id");
+    expect(calls).toEqual([
+      "discoverOAuth",
+      "upsert",
+      "setSecrets",
+      "startOAuth",
+    ]);
+    expect(outcome.authorizeUrl).toBe(
+      "https://auth.example/authorize?client_id=issued",
+    );
+    expect(JSON.stringify(outcome)).not.toContain("dynamic-secret");
+  });
+
+  it("uses the generic secret error when provision cannot store registration secret", async () => {
+    let stored: McpServerRecordLike | undefined;
+    const pluginText = "plugin echoed dynamic-secret";
+    const startOAuth = vi.fn();
+
+    await expect(runMcpOperation(contextWith(fakeService({
+      list: () => stored === undefined ? [] : [stored],
+      get: (id) => stored?.id === id ? stored : undefined,
+      upsert: async (record) => {
+        stored = record;
+        return record;
+      },
+      setSecrets: async () => {
+        throw new Error(pluginText);
+      },
+      startOAuth,
+      oauthRedirectOrigin: () => "http://127.0.0.1:9",
+      discoverOAuth: async () => ({
+        clientId: "issued",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: [],
+        registered: true,
+        clientSecret: "dynamic-secret",
+      }),
+    })), {
+      kind: "provisionOAuthServer",
+      serverName: "Glean",
+      url: "https://mcp.example/rpc",
+      enabled: true,
+    }, {
+      newId: () => "new-id",
+      now: () => "now",
+    })).rejects.toSatisfy((error: Error) => (
+      error.message ===
+        'Could not store MCP secrets for server "new-id": OAUTH_CLIENT_SECRET'
+      && !error.message.includes(pluginText)
+      && !error.message.includes("dynamic-secret")
+    ));
+    expect(startOAuth).not.toHaveBeenCalled();
+  });
+
+  it("returns the plugin authorize URL for an existing server", async () => {
+    const startOAuth = vi.fn(async () => ({
+      authorizeUrl: "https://auth.example/authorize",
+    }));
+
+    await expect(runMcpOperation(contextWith(fakeService({
+      startOAuth,
+      oauthRedirectOrigin: () => "http://127.0.0.1:9",
+    })), {
+      kind: "startOAuth",
+      serverId: "server-1",
+    })).resolves.toMatchObject({
+      authorizeUrl: "https://auth.example/authorize",
+      detail: expect.objectContaining({
+        server: expect.objectContaining({ id: "server-1" }),
+      }),
+    });
+    expect(startOAuth).toHaveBeenCalledWith("server-1");
+  });
+});
+
+describe("MCP OAuth discovery", () => {
+  const discovered = {
+    clientId: "issued-client",
+    authorizeUrl: "https://auth.example/authorize",
+    tokenUrl: "https://auth.example/token",
+    scopes: ["docs:read"],
+    registered: true,
+  };
+
+  it("projects the plugin's non-secret discovery fields", async () => {
+    const discoverOAuth = vi.fn(async () => discovered);
+    await expect(
+      discoverMcpOAuth(
+        contextWith(fakeService({ discoverOAuth })),
+        "https://mcp.example/rpc",
+      ),
+    ).resolves.toEqual({
+      clientId: "issued-client",
+      authorizeUrl: "https://auth.example/authorize",
+      tokenUrl: "https://auth.example/token",
+      scopes: ["docs:read"],
+      registered: true,
+      clientSecretIssued: false,
+    });
+    expect(discoverOAuth).toHaveBeenCalledWith("https://mcp.example/rpc");
+  });
+
+  it("reports a registration secret without forwarding its value", async () => {
+    const result = await discoverMcpOAuth(
+      contextWith(fakeService({
+        discoverOAuth: async () => ({
+          ...discovered,
+          clientSecret: "fixture-secret",
+        }),
+      })),
+      "https://mcp.example/rpc",
+    );
+
+    expect(result.clientSecretIssued).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("fixture-secret");
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOAuthDiscovery",
+      requestId: "disc1",
+      result: { ok: true, discovery: result },
+    })).toBe(true);
+  });
+
+  it("keeps an unregistered discovery's empty client id", async () => {
+    await expect(
+      discoverMcpOAuth(
+        contextWith(fakeService({
+          discoverOAuth: async () => ({
+            ...discovered,
+            clientId: "",
+            registered: false,
+          }),
+        })),
+        "https://mcp.example/rpc",
+      ),
+    ).resolves.toMatchObject({ clientId: "", registered: false });
+  });
+
+  it("refuses when the mounted plugin exposes no discovery entry point", async () => {
+    await expect(
+      discoverMcpOAuth(contextWith(fakeService()), "https://mcp.example/rpc"),
+    ).rejects.toThrow(/does not support OAuth discovery/);
+  });
+
+  it("refuses when no MCP service is mounted", async () => {
+    await expect(
+      discoverMcpOAuth(contextWith(), "https://mcp.example/rpc"),
+    ).rejects.toThrow(/not available/);
+  });
+
+  it("normalizes an empty discovery rejection", async () => {
+    await expect(
+      discoverMcpOAuth(
+        contextWith(fakeService({
+          discoverOAuth: async () => {
+            throw new Error("");
+          },
+        })),
+        "https://mcp.example/rpc",
+      ),
+    ).rejects.toThrow("OAuth discovery for https://mcp.example/rpc failed");
+  });
+
+  it("rejects endpoints the wire contract would refuse", async () => {
+    await expect(
+      discoverMcpOAuth(
+        contextWith(fakeService({
+          discoverOAuth: async () => ({ ...discovered, authorizeUrl: "" }),
+        })),
+        "https://mcp.example/rpc",
+      ),
+    ).rejects.toThrow(/authorize URL/);
+    await expect(
+      discoverMcpOAuth(
+        contextWith(fakeService({
+          discoverOAuth: async () => ({
+            ...discovered,
+            scopes: Array.from({ length: 33 }, (_, index) => `scope-${index}`),
+          }),
+        })),
+        "https://mcp.example/rpc",
+      ),
+    ).rejects.toThrow("32");
   });
 });

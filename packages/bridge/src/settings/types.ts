@@ -1,6 +1,7 @@
 import type {
   CopyAgentPresetCommand,
   DeleteAgentPresetCommand,
+  DiscoverMcpOAuthCommand,
   GetMcpLogsCommand,
   GetMcpServerCommand,
   MutateSettingsCommand,
@@ -22,6 +23,7 @@ export interface SettingsCoordinator {
   getMcpServer(message: GetMcpServerCommand): void;
   getMcpLogs(message: GetMcpLogsCommand): void;
   runMcpOperation(message: RunMcpOperationCommand): void;
+  discoverMcpOAuth(message: DiscoverMcpOAuthCommand): void;
   mutate(message: MutateSettingsCommand): void;
   setWebSearchConfig(message: SetWebSearchConfigCommand): void;
   setCredential(message: SetCredentialCommand): void;

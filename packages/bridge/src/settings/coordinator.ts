@@ -34,6 +34,7 @@ import { createCapabilityWatcher } from "./capabilities.js";
 import {
   buildMcpDetail,
   buildMcpView,
+  discoverMcpOAuth as applyMcpDiscovery,
   readMcpLogs,
   runMcpOperation as applyMcpOperation,
 } from "./mcp.js";
@@ -432,7 +433,9 @@ export function createSettingsCoordinator(
   const runMcpOperation: SettingsCoordinator["runMcpOperation"] = (message) => {
     const target = message.operation.kind === "upsertServer"
       ? message.operation.server.serverId ?? "new"
-      : message.operation.serverId;
+      : message.operation.kind === "provisionOAuthServer"
+        ? "new"
+        : message.operation.serverId;
     const key = `mcp-op:${target}`;
     const token = begin(key);
     beginSectionMutation("mcp");
@@ -471,6 +474,50 @@ export function createSettingsCoordinator(
         });
       } finally {
         finishSectionMutation("mcp");
+      }
+    })();
+  };
+
+  const discoverMcpOAuth: SettingsCoordinator["discoverMcpOAuth"] = (
+    message,
+  ) => {
+    // One key for every discovery: the editor holds one draft, so a newer
+    // request supersedes an in-flight one even against a different URL.
+    const key = "mcp-oauth-discovery";
+    const token = begin(key);
+    void (async () => {
+      try {
+        if (probeMcpService(ctx).state !== "ready") {
+          sendCurrent(key, token, {
+            kind: "mcpOAuthDiscovery",
+            requestId: message.requestId,
+            result: { ok: false, error: unavailable("MCP") },
+          });
+          return;
+        }
+        const discovery = await applyMcpDiscovery(ctx, message.url);
+        sendCurrent(key, token, {
+          kind: "mcpOAuthDiscovery",
+          requestId: message.requestId,
+          result: { ok: true, discovery },
+        });
+      } catch (error) {
+        const serviceMissing = probeMcpService(ctx).state !== "ready";
+        sendCurrent(key, token, {
+          kind: "mcpOAuthDiscovery",
+          requestId: message.requestId,
+          result: {
+            ok: false,
+            error: serviceMissing
+              ? unavailable("MCP")
+              : {
+                  code: "mcp-rejected",
+                  message: truncatePluginMessage(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                },
+          },
+        });
       }
     })();
   };
@@ -800,6 +847,7 @@ export function createSettingsCoordinator(
     getMcpServer,
     getMcpLogs,
     runMcpOperation,
+    discoverMcpOAuth,
     mutate,
     setWebSearchConfig,
     setCredential,
