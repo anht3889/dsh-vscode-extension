@@ -395,14 +395,10 @@ function settlePendingCommand(
       };
 }
 
-/** Stop open thinking and assistant text streams. */
-function closeStreaming(rows: TimelineRow[]): TimelineRow[] {
+/** Stop open assistant text streams. */
+function closeAssistantStreaming(rows: TimelineRow[]): TimelineRow[] {
   let changed = false;
   const closed = rows.map((row): TimelineRow => {
-    if (row.kind === "thinking" && row.running) {
-      changed = true;
-      return { ...row, running: false };
-    }
     if (row.kind === "assistant" && row.streaming) {
       changed = true;
       return { ...row, streaming: false };
@@ -461,7 +457,7 @@ export function foldEvent(
       const text = messageText(event.data.content);
       if (text === "") return rows;
       return [
-        ...closeStreaming(rows),
+        ...closeAssistantStreaming(rows),
         { kind: "user", seq: event.seq, text },
       ];
     }
@@ -470,7 +466,7 @@ export function foldEvent(
       const line = commandRunLine(event);
       if (line === undefined) return rows;
       return [
-        ...closeStreaming(rows),
+        ...closeAssistantStreaming(rows),
         { kind: "user", seq: event.seq, text: line },
       ];
     }
@@ -500,22 +496,21 @@ export function foldEvent(
         ];
       }
       if (type !== "text-delta") return rows;
-      const withThinkingClosed = closeThinking(rows);
       const index = lastRowIndex(
-        withThinkingClosed,
+        rows,
         (row) => row.kind === "assistant" && row.streaming,
       );
       if (index >= 0) {
-        const row = withThinkingClosed[index]!;
-        if (row.kind !== "assistant") return withThinkingClosed;
+        const row = rows[index]!;
+        if (row.kind !== "assistant") return rows;
         return [
-          ...withThinkingClosed.slice(0, index),
+          ...rows.slice(0, index),
           { ...row, text: row.text + text },
-          ...withThinkingClosed.slice(index + 1),
+          ...rows.slice(index + 1),
         ];
       }
       return [
-        ...withThinkingClosed,
+        ...rows,
         { kind: "assistant", seq: event.seq, text, streaming: true },
       ];
     }
@@ -527,29 +522,28 @@ export function foldEvent(
           ? (message as { content?: unknown }).content
           : undefined;
       const text = messageText(content);
-      const withThinkingClosed = closeThinking(rows);
       const index = lastRowIndex(
-        withThinkingClosed,
+        rows,
         (row) => row.kind === "assistant" && row.streaming,
       );
       if (index >= 0) {
-        const row = withThinkingClosed[index]!;
-        if (row.kind !== "assistant") return withThinkingClosed;
+        const row = rows[index]!;
+        if (row.kind !== "assistant") return rows;
         // The assembled message is authoritative over the accumulated deltas,
         // except when it holds no text at all (tool-call-only steps).
         return [
-          ...withThinkingClosed.slice(0, index),
+          ...rows.slice(0, index),
           {
             ...row,
             text: text === "" ? row.text : text,
             streaming: false,
           },
-          ...withThinkingClosed.slice(index + 1),
+          ...rows.slice(index + 1),
         ];
       }
-      if (text === "") return withThinkingClosed;
+      if (text === "") return rows;
       return [
-        ...withThinkingClosed,
+        ...rows,
         { kind: "assistant", seq: event.seq, text, streaming: false },
       ];
     }
@@ -558,8 +552,10 @@ export function foldEvent(
       return closeThinking(rows);
 
     case "turn/start":
+      return closeAssistantStreaming(rows);
+
     case "turn/end":
-      return closeStreaming(rows);
+      return closeThinking(closeAssistantStreaming(rows));
 
     default:
       return rows;
@@ -1219,7 +1215,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
           approval: undefined,
           diffs: [],
           status: "thinking",
-          timeline: closeStreaming(state.timeline),
+          timeline: foldEvent(state.timeline, msg.event),
         };
       }
       if (type === "turn/end") {
