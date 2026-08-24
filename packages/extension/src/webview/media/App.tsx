@@ -974,7 +974,7 @@ export function App(): JSX.Element {
         ) : null}
       </Header>
       <StreamView
-        transcript={state.transcript}
+        timeline={state.timeline}
         diffs={state.diffs}
         onApply={apply}
       />

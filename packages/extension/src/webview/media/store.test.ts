@@ -140,15 +140,24 @@ describe("reduce", () => {
   it("coalesces streamed deltas into one growing assistant entry", () => {
     const first = reduce(initialState, textDelta("## Hel"));
     const second = reduce(first, textDelta("lo"));
-    expect(second.transcript).toEqual([
-      { role: "assistant", text: "## Hello", streaming: true },
+    expect(second.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "## Hello", streaming: true },
     ]);
   });
 
-  it("ignores reasoning deltas and other chunk types", () => {
-    const streamed = reduce(initialState, textDelta("answer"));
-    const withReasoning = reduce(streamed, reasoningDelta("thinking"));
-    expect(withReasoning).toBe(streamed);
+  it("streams reasoning then collapses it when answer text starts", () => {
+    const thinking = reduce(initialState, reasoningDelta("line one\nline two"));
+    expect(thinking.timeline).toEqual([
+      { kind: "thinking", seq: 1, text: "line one\nline two", running: true },
+    ]);
+    const answered = reduce(thinking, textDelta("Hello"));
+    expect(answered.timeline).toEqual([
+      { kind: "thinking", seq: 1, text: "line one\nline two", running: false },
+      { kind: "assistant", seq: 1, text: "Hello", streaming: true },
+    ]);
+  });
+
+  it("ignores other chunk types", () => {
     expect(
       reduce(initialState, eventMsg("assistant/chunk", { chunk: { type: "usage" } })),
     ).toBe(initialState);
@@ -157,28 +166,28 @@ describe("reduce", () => {
   it("finalizes the streamed entry from assistant/message instead of duplicating it", () => {
     const streamed = reduce(initialState, textDelta("Hell"));
     const done = reduce(streamed, assistantMessage("Hello"));
-    expect(done.transcript).toEqual([
-      { role: "assistant", text: "Hello", streaming: false },
+    expect(done.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "Hello", streaming: false },
     ]);
   });
 
   it("keeps streamed text when the assembled message carries none", () => {
     const streamed = reduce(initialState, textDelta("partial"));
     const toolOnly = reduce(streamed, assistantMessage());
-    expect(toolOnly.transcript).toEqual([
-      { role: "assistant", text: "partial", streaming: false },
+    expect(toolOnly.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "partial", streaming: false },
     ]);
   });
 
   it("joins multiple text blocks of one assembled message", () => {
     const s = reduce(initialState, assistantMessage("first", "second"));
-    expect(s.transcript[0]?.text).toBe("first\n\nsecond");
+    expect(s.timeline[0]).toMatchObject({ text: "first\n\nsecond" });
   });
 
   it("starts a new entry for each step of a multi-step turn", () => {
     const step1 = reduce(reduce(initialState, textDelta("looking")), assistantMessage("looking"));
     const step2 = reduce(reduce(step1, textDelta("done")), assistantMessage("done"));
-    expect(step2.transcript.map((entry) => entry.text)).toEqual([
+    expect(step2.timeline.map((entry) => "text" in entry ? entry.text : "")).toEqual([
       "looking",
       "done",
     ]);
@@ -186,8 +195,8 @@ describe("reduce", () => {
 
   it("shows the person's own message and hides injected context messages", () => {
     const typed = reduce(initialState, userMessage("hi there"));
-    expect(typed.transcript).toEqual([
-      { role: "user", text: "hi there", streaming: false },
+    expect(typed.timeline).toEqual([
+      { kind: "user", seq: 1, text: "hi there" },
     ]);
     for (const kind of ["plugin", "session-reference", "subagent-report"]) {
       expect(reduce(typed, userMessage("injected", kind))).toBe(typed);
@@ -197,12 +206,12 @@ describe("reduce", () => {
   it("closes a dangling streamed entry when the next turn starts", () => {
     const dangling = reduce(initialState, textDelta("cut off"));
     const next = reduce(dangling, eventMsg("turn/start", { turn: 2 }));
-    expect(next.transcript).toEqual([
-      { role: "assistant", text: "cut off", streaming: false },
+    expect(next.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "cut off", streaming: false },
     ]);
   });
 
-  it("projects a resumed history into the same transcript", () => {
+  it("projects a resumed history into the same timeline", () => {
     const resumed = reduce(initialState, {
       kind: "history",
       sessionId: "s1",
@@ -214,9 +223,9 @@ describe("reduce", () => {
         assistantMessage("partial answer").event,
       ],
     });
-    expect(resumed.transcript).toEqual([
-      { role: "user", text: "ask", streaming: false },
-      { role: "assistant", text: "partial answer", streaming: false },
+    expect(resumed.timeline).toEqual([
+      { kind: "user", seq: 1, text: "ask" },
+      { kind: "assistant", seq: 1, text: "partial answer", streaming: false },
     ]);
   });
 
@@ -230,9 +239,9 @@ describe("reduce", () => {
         source: { kind: "user" },
       }),
     );
-    expect(running.transcript).toEqual([
-      { role: "assistant", text: "unfinished", streaming: false },
-      { role: "user", text: "/goal write tests", streaming: false },
+    expect(running.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "unfinished", streaming: false },
+      { kind: "user", seq: 1, text: "/goal write tests" },
     ]);
     const done = reduce(
       running,
@@ -241,7 +250,7 @@ describe("reduce", () => {
         kind: "success",
       }),
     );
-    expect(done.transcript).toBe(running.transcript);
+    expect(done.timeline).toBe(running.timeline);
     expect(done.status).toBe("idle");
   });
 
@@ -261,8 +270,8 @@ describe("reduce", () => {
         }).event,
       ],
     });
-    expect(resumed.transcript).toEqual([
-      { role: "user", text: "/compact", streaming: false },
+    expect(resumed.timeline).toEqual([
+      { kind: "user", seq: 1, text: "/compact" },
     ]);
   });
 
@@ -340,21 +349,21 @@ describe("reduce", () => {
 
     const s = reduce(withDiffs, eventMsg("turn/start", {}));
     expect(s.diffs).toEqual([]);
-    expect(s.transcript).toEqual([
-      { role: "assistant", text: "previous turn", streaming: false },
+    expect(s.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "previous turn", streaming: false },
     ]);
     expect(s.status).toBe("thinking");
   });
 
-  it("replaces the transcript from resumed history", () => {
+  it("replaces the timeline from resumed history", () => {
     const state = reduce(reduce(initialState, assistantMessage("old")), {
       kind: "history",
       sessionId: "resumed",
       events: [assistantMessage("restored").event],
     });
     expect(state.sessionId).toBe("resumed");
-    expect(state.transcript).toEqual([
-      { role: "assistant", text: "restored", streaming: false },
+    expect(state.timeline).toEqual([
+      { kind: "assistant", seq: 1, text: "restored", streaming: false },
     ]);
   });
 
@@ -362,7 +371,7 @@ describe("reduce", () => {
     const populated: UiState = {
       ...initialState,
       sessionId: "old",
-      transcript: [{ role: "assistant", text: "old", streaming: false }],
+      timeline: [{ kind: "assistant", seq: 1, text: "old", streaming: false }],
       diffs: [{ path: "/x", oldText: "a", newText: "b" }],
       approval: { askId: "a", questions: [QUESTION] },
     };
@@ -372,7 +381,7 @@ describe("reduce", () => {
       cwd: "/tmp",
       createdAt: 1,
     });
-    expect(state.transcript).toEqual([]);
+    expect(state.timeline).toEqual([]);
     expect(state.diffs).toEqual([]);
     expect(state.approval).toBeUndefined();
   });
@@ -515,7 +524,7 @@ describe("reduce", () => {
     });
     const state: UiState = {
       ...opened,
-      transcript: [{ role: "assistant", text: "Existing", streaming: false }],
+      timeline: [{ kind: "assistant", seq: 1, text: "Existing", streaming: false }],
       chips: [{
         id: "image-1",
         kind: "image",
@@ -534,7 +543,7 @@ describe("reduce", () => {
 
     expect(closed).toEqual({ ...state, picker: undefined });
     expect(closed.draft).toBe("read @src");
-    expect(closed.transcript).toBe(state.transcript);
+    expect(closed.timeline).toBe(state.timeline);
     expect(closed.chips).toBe(state.chips);
     expect(closed.commandClaim).toBe(state.commandClaim);
   });
@@ -1317,8 +1326,8 @@ describe("reduce", () => {
         source: { kind: "user" },
       }),
     );
-    expect(accepted.transcript).toEqual([
-      { role: "user", text: "/feedback", streaming: false },
+    expect(accepted.timeline).toEqual([
+      { kind: "user", seq: 1, text: "/feedback" },
     ]);
     expect(accepted.draft).toBe("");
     expect(accepted.chips).toEqual([]);

@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import type { ToolDiff } from "@dsh-vscode/contract";
-import type { TranscriptEntry } from "../store.js";
+import type { TimelineRow } from "../store.js";
 import { Markdown } from "./Markdown.js";
 import { ToolCard } from "./ToolCard.js";
 
 interface StreamViewProps {
-  transcript: TranscriptEntry[];
+  timeline: TimelineRow[];
   diffs: ToolDiff[];
   onApply(): void;
 }
@@ -14,12 +14,12 @@ interface StreamViewProps {
 const STICK_THRESHOLD_PX = 24;
 
 export function StreamView({
-  transcript,
+  timeline,
   diffs,
   onApply,
 }: StreamViewProps): JSX.Element {
   const view = useRef<HTMLElement>(null);
-  // Streamed deltas grow the transcript continuously; follow the tail only while
+  // Streamed deltas grow the timeline continuously; follow the tail only while
   // the reader is already at it, so scrolling back to re-read is not yanked away.
   const stick = useRef(true);
 
@@ -39,19 +39,22 @@ export function StreamView({
 
   return (
     <main className="dsh-stream" ref={view} onScroll={onScroll}>
-      {transcript.map((entry, i) => (
-        <article
-          className={`dsh-turn dsh-turn-${entry.role}`}
-          key={`t-${i}`}
-          aria-label={entry.role === "user" ? "You" : "DeepSeek Harness"}
-        >
-          {entry.role === "assistant" ? (
-            <Markdown source={entry.text} />
-          ) : (
-            <div className="dsh-turn-text">{entry.text}</div>
-          )}
-        </article>
-      ))}
+      {timeline.map((row, i) => {
+        if (row.kind !== "user" && row.kind !== "assistant") return null;
+        return (
+          <article
+            className={`dsh-turn dsh-turn-${row.kind}`}
+            key={`${row.kind}-${row.seq}-${i}`}
+            aria-label={row.kind === "user" ? "You" : "DeepSeek Harness"}
+          >
+            {row.kind === "assistant" ? (
+              <Markdown source={row.text} />
+            ) : (
+              <div className="dsh-turn-text">{row.text}</div>
+            )}
+          </article>
+        );
+      })}
       {diffs.map((diff, i) => (
         <ToolCard key={`d-${i}`} diff={diff} />
       ))}

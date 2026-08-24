@@ -10,7 +10,9 @@ import type {
   SessionListItem,
   SlashAvailability,
   SlashMenuItem,
+  ToolCallView,
   ToolDiff,
+  ToolResultView,
 } from "@dsh-vscode/contract";
 import type { ImagesPickedMessage } from "./vscode.js";
 import { formatChipMention } from "./chipMention.js";
@@ -91,22 +93,36 @@ export interface PendingPromptSubmission {
   chips: DraftChip[];
 }
 
-/**
- * One rendered turn of the conversation.
- *
- * Assistant text is markdown source; user text is shown verbatim. `streaming`
- * marks the entry that `text-delta` chunks are still appending to, which is
- * also the entry `assistant/message` finalizes instead of duplicating.
- */
-export interface TranscriptEntry {
-  role: "user" | "assistant";
-  text: string;
-  streaming: boolean;
-}
+/** One ordered row folded from the session event stream. */
+export type TimelineRow =
+  | { kind: "user"; seq: number; text: string }
+  | { kind: "thinking"; seq: number; text: string; running: boolean }
+  | { kind: "assistant"; seq: number; text: string; streaming: boolean }
+  | {
+      kind: "tool";
+      seq: number;
+      callId: string;
+      name: string;
+      argsRaw: string;
+      status: "running" | "ok" | "error" | "stopped";
+      resultText?: string;
+      callView?: ToolCallView;
+      resultView?: ToolResultView;
+      diffs: ToolDiff[];
+    }
+  | {
+      kind: "command";
+      seq: number;
+      commandId: string;
+      name: string;
+      args: string | null;
+      status: "running" | "success" | "error";
+      output?: string;
+    };
 
 export interface UiState {
-  /** The conversation, folded from `user/message` and `assistant/*` events. */
-  transcript: TranscriptEntry[];
+  /** The conversation timeline folded from session events. */
+  timeline: TimelineRow[];
   /** The current pending approval (set by `ask`, kept until the matching answer). */
   approval: ApprovalState | undefined;
   /** File diffs extracted from `tool/result` events for DiffView. */
@@ -132,7 +148,7 @@ export interface UiState {
 }
 
 export const initialState: UiState = {
-  transcript: [],
+  timeline: [],
   approval: undefined,
   diffs: [],
   error: undefined,
@@ -379,17 +395,50 @@ function settlePendingCommand(
       };
 }
 
-/** Stop `text-delta` chunks from extending the newest assistant entry. */
-function closeStreaming(entries: TranscriptEntry[]): TranscriptEntry[] {
-  const last = entries.at(-1);
-  if (last === undefined || last.role !== "assistant" || !last.streaming) {
-    return entries;
+/** Stop open thinking and assistant text streams. */
+function closeStreaming(rows: TimelineRow[]): TimelineRow[] {
+  let changed = false;
+  const closed = rows.map((row): TimelineRow => {
+    if (row.kind === "thinking" && row.running) {
+      changed = true;
+      return { ...row, running: false };
+    }
+    if (row.kind === "assistant" && row.streaming) {
+      changed = true;
+      return { ...row, streaming: false };
+    }
+    return row;
+  });
+  return changed ? closed : rows;
+}
+
+function lastRowIndex(
+  rows: TimelineRow[],
+  matches: (row: TimelineRow) => boolean,
+): number {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (matches(rows[index]!)) return index;
   }
-  return [...entries.slice(0, -1), { ...last, streaming: false }];
+  return -1;
+}
+
+function closeThinking(rows: TimelineRow[]): TimelineRow[] {
+  const index = lastRowIndex(
+    rows,
+    (row) => row.kind === "thinking" && row.running,
+  );
+  if (index < 0) return rows;
+  const row = rows[index]!;
+  if (row.kind !== "thinking") return rows;
+  return [
+    ...rows.slice(0, index),
+    { ...row, running: false },
+    ...rows.slice(index + 1),
+  ];
 }
 
 /**
- * Fold one session event into the transcript, returning the same array when the
+ * Fold one session event into the timeline, returning the same array when the
  * event contributes no text.
  *
  * Both live events and a resumed `history` reply go through here, so a resumed
@@ -398,9 +447,9 @@ function closeStreaming(entries: TranscriptEntry[]): TranscriptEntry[] {
  * messages are injected context the person never typed.
  */
 export function foldEvent(
-  entries: TranscriptEntry[],
+  rows: TimelineRow[],
   event: SessionEventWire,
-): TranscriptEntry[] {
+): TimelineRow[] {
   switch (event.type) {
     case "user/message": {
       const source: unknown = event.data.source;
@@ -408,41 +457,67 @@ export function foldEvent(
         typeof source === "object" && source !== null
           ? (source as { kind?: unknown }).kind
           : undefined;
-      if (kind !== "user") return entries;
+      if (kind !== "user") return rows;
       const text = messageText(event.data.content);
-      if (text === "") return entries;
+      if (text === "") return rows;
       return [
-        ...closeStreaming(entries),
-        { role: "user", text, streaming: false },
+        ...closeStreaming(rows),
+        { kind: "user", seq: event.seq, text },
       ];
     }
 
     case "command/run": {
       const line = commandRunLine(event);
-      if (line === undefined) return entries;
+      if (line === undefined) return rows;
       return [
-        ...closeStreaming(entries),
-        { role: "user", text: line, streaming: false },
+        ...closeStreaming(rows),
+        { kind: "user", seq: event.seq, text: line },
       ];
     }
 
     case "assistant/chunk": {
       const chunk: unknown = event.data.chunk;
-      if (typeof chunk !== "object" || chunk === null) return entries;
+      if (typeof chunk !== "object" || chunk === null) return rows;
       const { type, text } = chunk as { type?: unknown; text?: unknown };
-      // Only visible answer text streams into the transcript; reasoning and
-      // tool-call deltas are separate surfaces.
-      if (type !== "text-delta" || typeof text !== "string" || text === "") {
-        return entries;
-      }
-      const last = entries.at(-1);
-      if (last !== undefined && last.role === "assistant" && last.streaming) {
+      if (typeof text !== "string" || text === "") return rows;
+      if (type === "reasoning-delta") {
+        const index = lastRowIndex(
+          rows,
+          (row) => row.kind === "thinking" && row.running,
+        );
+        if (index < 0) {
+          return [
+            ...rows,
+            { kind: "thinking", seq: event.seq, text, running: true },
+          ];
+        }
+        const row = rows[index]!;
+        if (row.kind !== "thinking") return rows;
         return [
-          ...entries.slice(0, -1),
-          { ...last, text: last.text + text },
+          ...rows.slice(0, index),
+          { ...row, text: row.text + text },
+          ...rows.slice(index + 1),
         ];
       }
-      return [...entries, { role: "assistant", text, streaming: true }];
+      if (type !== "text-delta") return rows;
+      const withThinkingClosed = closeThinking(rows);
+      const index = lastRowIndex(
+        withThinkingClosed,
+        (row) => row.kind === "assistant" && row.streaming,
+      );
+      if (index >= 0) {
+        const row = withThinkingClosed[index]!;
+        if (row.kind !== "assistant") return withThinkingClosed;
+        return [
+          ...withThinkingClosed.slice(0, index),
+          { ...row, text: row.text + text },
+          ...withThinkingClosed.slice(index + 1),
+        ];
+      }
+      return [
+        ...withThinkingClosed,
+        { kind: "assistant", seq: event.seq, text, streaming: true },
+      ];
     }
 
     case "assistant/message": {
@@ -452,25 +527,42 @@ export function foldEvent(
           ? (message as { content?: unknown }).content
           : undefined;
       const text = messageText(content);
-      const last = entries.at(-1);
-      if (last !== undefined && last.role === "assistant" && last.streaming) {
+      const withThinkingClosed = closeThinking(rows);
+      const index = lastRowIndex(
+        withThinkingClosed,
+        (row) => row.kind === "assistant" && row.streaming,
+      );
+      if (index >= 0) {
+        const row = withThinkingClosed[index]!;
+        if (row.kind !== "assistant") return withThinkingClosed;
         // The assembled message is authoritative over the accumulated deltas,
         // except when it holds no text at all (tool-call-only steps).
         return [
-          ...entries.slice(0, -1),
+          ...withThinkingClosed.slice(0, index),
           {
-            role: "assistant",
-            text: text === "" ? last.text : text,
+            ...row,
+            text: text === "" ? row.text : text,
             streaming: false,
           },
+          ...withThinkingClosed.slice(index + 1),
         ];
       }
-      if (text === "") return entries;
-      return [...entries, { role: "assistant", text, streaming: false }];
+      if (text === "") return withThinkingClosed;
+      return [
+        ...withThinkingClosed,
+        { kind: "assistant", seq: event.seq, text, streaming: false },
+      ];
     }
 
+    case "assistant/analysis-end":
+      return closeThinking(rows);
+
+    case "turn/start":
+    case "turn/end":
+      return closeStreaming(rows);
+
     default:
-      return entries;
+      return rows;
   }
 }
 
@@ -1034,7 +1126,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         commandClaim: undefined,
         ...(changed
           ? {
-              transcript: [],
+              timeline: [],
               diffs: [],
               approval: undefined,
               context: undefined,
@@ -1052,7 +1144,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
       return {
         ...state,
         sessionId: msg.sessionId,
-        transcript: msg.events.reduce(foldEvent, []),
+        timeline: msg.events.reduce(foldEvent, []),
         diffs: [],
         approval: undefined,
         draft: "",
@@ -1127,19 +1219,25 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
           approval: undefined,
           diffs: [],
           status: "thinking",
-          transcript: closeStreaming(state.transcript),
+          timeline: closeStreaming(state.timeline),
         };
       }
       if (type === "turn/end") {
-        return { ...state, approval: undefined, status: "idle" };
+        return {
+          ...state,
+          approval: undefined,
+          status: "idle",
+          timeline: foldEvent(state.timeline, msg.event),
+        };
       }
       if (
         type === "user/message" ||
         type === "assistant/chunk" ||
         type === "assistant/message" ||
+        type === "assistant/analysis-end" ||
         type === "command/run"
       ) {
-        const transcript = foldEvent(state.transcript, msg.event);
+        const timeline = foldEvent(state.timeline, msg.event);
         if (type === "command/run") {
           const name = commandRunName(msg.event);
           const pending = state.pendingCommandSubmission;
@@ -1153,7 +1251,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
             sameChips(state.chips, pending.chips);
           return {
             ...state,
-            transcript,
+            timeline,
             ...(unchanged
               ? {
                   draft: "",
@@ -1171,7 +1269,7 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
             status: "thinking",
           };
         }
-        return transcript === state.transcript ? state : { ...state, transcript };
+        return timeline === state.timeline ? state : { ...state, timeline };
       }
       if (type === "command/done") {
         const settled = settlePendingCommand(state);

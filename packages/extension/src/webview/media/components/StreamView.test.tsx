@@ -4,10 +4,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StreamView } from "./StreamView.js";
-import type { TranscriptEntry } from "../store.js";
+import type { TimelineRow } from "../store.js";
 
-function assistant(text: string, streaming = false): TranscriptEntry {
-  return { role: "assistant", text, streaming };
+function assistant(text: string, streaming = false): TimelineRow {
+  return { kind: "assistant", seq: 0, text, streaming };
 }
 
 afterEach(cleanup);
@@ -16,7 +16,7 @@ describe("StreamView", () => {
   it("renders assistant markdown as real elements", () => {
     render(
       <StreamView
-        transcript={[assistant("## Plan\n\n- step **one**\n\n`inline`")]}
+        timeline={[assistant("## Plan\n\n- step **one**\n\n`inline`")]}
         diffs={[]}
         onApply={vi.fn()}
       />,
@@ -30,7 +30,7 @@ describe("StreamView", () => {
   it("shows a user turn verbatim rather than as markdown", () => {
     render(
       <StreamView
-        transcript={[{ role: "user", text: "## not a heading", streaming: false }]}
+        timeline={[{ kind: "user", seq: 0, text: "## not a heading" }]}
         diffs={[]}
         onApply={vi.fn()}
       />,
@@ -48,7 +48,7 @@ describe("StreamView", () => {
 
     render(
       <StreamView
-        transcript={[assistant('```ts\nconst a = "<b>";\n```')]}
+        timeline={[assistant('```ts\nconst a = "<b>";\n```')]}
         diffs={[]}
         onApply={vi.fn()}
       />,
@@ -67,7 +67,7 @@ describe("StreamView", () => {
     });
 
     render(
-      <StreamView transcript={[assistant("```\nx\n```")]} diffs={[]} onApply={vi.fn()} />,
+      <StreamView timeline={[assistant("```\nx\n```")]} diffs={[]} onApply={vi.fn()} />,
     );
     const button = screen.getByRole("button", { name: "Copy code" });
     fireEvent.click(button);
@@ -79,12 +79,27 @@ describe("StreamView", () => {
     const onApply = vi.fn();
     render(
       <StreamView
-        transcript={[assistant("done", true)]}
+        timeline={[assistant("done", true)]}
         diffs={[{ path: "/x/a.ts", oldText: "a", newText: "b" }]}
         onApply={onApply}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Apply all diffs" }));
     expect(onApply).toHaveBeenCalled();
+  });
+
+  it("does not render thinking rows yet", () => {
+    render(
+      <StreamView
+        timeline={[
+          { kind: "thinking", seq: 1, text: "private reasoning", running: true },
+          assistant("visible answer"),
+        ]}
+        diffs={[]}
+        onApply={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("private reasoning")).toBeNull();
+    expect(screen.getByText("visible answer")).toBeVisible();
   });
 });
