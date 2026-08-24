@@ -8,6 +8,7 @@ import {
   settingsText,
 } from "../../localization/index.js";
 import type { SettingsLocale } from "../../types.js";
+import { ModelCard, ModelField } from "./ModelCard.js";
 import { ModelsController } from "./ModelsController.js";
 
 interface ProviderEditorProps {
@@ -220,49 +221,53 @@ export function ProviderEditor({
           {settingsText(locale, "modelsResetModels")}
         </button>
         {modelList.map((model, index) => (
-          <div className="dsh-models-model-row" key={index}>
-            <input
-              aria-label={`${settingsText(locale, "modelsModelId")} ${index + 1}`}
-              value={typeof model.id === "string" ? model.id : ""}
-              disabled={pending}
-              onChange={(event) => {
-                const next = modelList.map((item, at) => (
-                  at === index ? { ...item, id: event.target.value } : item
-                ));
-                controller.setModels(next);
-              }}
-            />
-            <input
-              aria-label={`${settingsText(locale, "modelsContextWindow")} ${index + 1}`}
-              type="number"
-              min={1}
-              step={1}
-              value={typeof model.contextWindow === "number"
-                ? model.contextWindow
-                : ""}
-              disabled={pending}
-              onChange={(event) => {
-                const next = modelList.map((item, at) => at === index
-                  ? {
-                      ...item,
-                      ...(event.target.value === ""
-                        ? {}
-                        : { contextWindow: Number(event.target.value) }),
-                    }
-                  : item);
-                controller.setModels(next);
-              }}
-            />
-            <button
-              type="button"
-              aria-label={`${settingsText(locale, "modelsRemoveModel")} ${index + 1}`}
-              disabled={pending}
-              onClick={() =>
-                controller.setModels(modelList.filter((_, at) => at !== index))}
-            >
-              ×
-            </button>
-          </div>
+          <ModelCard
+            key={index}
+            locale={locale}
+            index={index}
+            disabled={pending}
+            onRemove={() =>
+              controller.setModels(modelList.filter((_, at) => at !== index))}
+          >
+            <ModelField label={settingsText(locale, "modelsModelId")}>
+              <input
+                aria-label={`${settingsText(locale, "modelsModelId")} ${index + 1}`}
+                value={typeof model.id === "string" ? model.id : ""}
+                placeholder={settingsText(locale, "modelsModelIdPlaceholder")}
+                disabled={pending}
+                onChange={(event) => {
+                  const next = modelList.map((item, at) => (
+                    at === index ? { ...item, id: event.target.value } : item
+                  ));
+                  controller.setModels(next);
+                }}
+              />
+            </ModelField>
+            <ModelField label={settingsText(locale, "modelsContextWindow")}>
+              <input
+                aria-label={`${settingsText(locale, "modelsContextWindow")} ${index + 1}`}
+                type="number"
+                min={1}
+                step={1}
+                value={typeof model.contextWindow === "number"
+                  ? model.contextWindow
+                  : ""}
+                placeholder={settingsText(locale, "modelsContextWindowPlaceholder")}
+                disabled={pending}
+                onChange={(event) => {
+                  const next = modelList.map((item, at) => at === index
+                    ? {
+                        ...item,
+                        ...(event.target.value === ""
+                          ? {}
+                          : { contextWindow: Number(event.target.value) }),
+                      }
+                    : item);
+                  controller.setModels(next);
+                }}
+              />
+            </ModelField>
+          </ModelCard>
         ))}
         <button
           type="button"

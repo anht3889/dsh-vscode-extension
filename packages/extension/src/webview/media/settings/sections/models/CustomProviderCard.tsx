@@ -8,6 +8,7 @@ import {
   settingsText,
 } from "../../localization/index.js";
 import type { SettingsLocale } from "../../types.js";
+import { ModelCard, ModelField } from "./ModelCard.js";
 import { ModelsController } from "./ModelsController.js";
 
 const LEGAL_API_KEY = /^[\x21-\x7E]+$/;
@@ -203,62 +204,74 @@ export function CustomProviderCard({
       <fieldset className="dsh-models-models">
         <legend>{settingsText(locale, "models")}</legend>
         {draft.models.map((model, index) => (
-          <div
-            className="dsh-models-model-row dsh-models-custom-model-row"
+          <ModelCard
             key={index}
+            locale={locale}
+            index={index}
+            disabled={profileDisabled}
+            onRemove={() => controller.setCustomModels(
+              draft.models.filter((_, at) => at !== index),
+            )}
           >
-            <input
-              aria-label={`${settingsText(locale, "modelsModelId")} ${index + 1}`}
-              value={typeof model.id === "string" ? model.id : ""}
-              disabled={profileDisabled}
-              onChange={(event) => updateModel(index, "id", event.target.value)}
-              onBlur={(event) => {
-                const trimmed = event.target.value.trim();
-                if (trimmed !== event.target.value) {
-                  updateModel(index, "id", trimmed);
-                }
-              }}
-            />
-            <input
-              aria-label={`${settingsText(locale, "modelsModelName")} ${index + 1}`}
-              value={typeof model.name === "string" ? model.name : ""}
-              disabled={profileDisabled}
-              onChange={(event) => updateModel(index, "name", event.target.value)}
-            />
-            {(["contextWindow", "maxTokens"] as const).map((field) => (
+            <ModelField label={settingsText(locale, "modelsModelId")}>
               <input
-                key={field}
-                aria-label={`${settingsText(
-                  locale,
-                  field === "contextWindow"
-                    ? "modelsContextWindow"
-                    : "modelsMaxTokens",
-                )} ${index + 1}`}
-                type="number"
-                min={1}
-                step={1}
-                value={typeof model[field] === "number" ? model[field] : ""}
+                aria-label={`${settingsText(locale, "modelsModelId")} ${index + 1}`}
+                value={typeof model.id === "string" ? model.id : ""}
+                placeholder={settingsText(locale, "modelsModelIdPlaceholder")}
                 disabled={profileDisabled}
-                onChange={(event) => updateModel(
-                  index,
-                  field,
-                  event.target.value === ""
-                    ? undefined
-                    : Number(event.target.value),
-                )}
+                onChange={(event) => updateModel(index, "id", event.target.value)}
+                onBlur={(event) => {
+                  const trimmed = event.target.value.trim();
+                  if (trimmed !== event.target.value) {
+                    updateModel(index, "id", trimmed);
+                  }
+                }}
               />
-            ))}
-            <button
-              type="button"
-              aria-label={`${settingsText(locale, "modelsRemoveModel")} ${index + 1}`}
-              disabled={profileDisabled}
-              onClick={() => controller.setCustomModels(
-                draft.models.filter((_, at) => at !== index),
-              )}
-            >
-              ×
-            </button>
-          </div>
+            </ModelField>
+            <ModelField label={settingsText(locale, "modelsModelName")}>
+              <input
+                aria-label={`${settingsText(locale, "modelsModelName")} ${index + 1}`}
+                value={typeof model.name === "string" ? model.name : ""}
+                placeholder={typeof model.id === "string" && model.id.length > 0
+                  ? model.id
+                  : settingsText(locale, "modelsModelNamePlaceholder")}
+                disabled={profileDisabled}
+                onChange={(event) => updateModel(index, "name", event.target.value)}
+              />
+            </ModelField>
+            <div className="dsh-models-model-limits">
+              {(["contextWindow", "maxTokens"] as const).map((field) => {
+                const labelKey = field === "contextWindow"
+                  ? "modelsContextWindow"
+                  : "modelsMaxTokens";
+                return (
+                  <ModelField key={field} label={settingsText(locale, labelKey)}>
+                    <input
+                      aria-label={`${settingsText(locale, labelKey)} ${index + 1}`}
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={typeof model[field] === "number" ? model[field] : ""}
+                      placeholder={settingsText(
+                        locale,
+                        field === "contextWindow"
+                          ? "modelsContextWindowPlaceholder"
+                          : "modelsMaxTokensPlaceholder",
+                      )}
+                      disabled={profileDisabled}
+                      onChange={(event) => updateModel(
+                        index,
+                        field,
+                        event.target.value === ""
+                          ? undefined
+                          : Number(event.target.value),
+                      )}
+                    />
+                  </ModelField>
+                );
+              })}
+            </div>
+          </ModelCard>
         ))}
         <button
           type="button"

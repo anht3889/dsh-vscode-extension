@@ -1109,7 +1109,7 @@ body,
 .dsh-models-field input,
 .dsh-models-field select,
 .dsh-models-add select,
-.dsh-models-model-row input {
+.dsh-models-model-field input {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
@@ -1120,20 +1120,43 @@ body,
   margin-bottom: 4px;
 }
 
-.dsh-models-model-row {
+.dsh-models-model-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(88px, 0.5fr) auto;
-  gap: 6px;
-  margin-bottom: 6px;
+  min-width: 0;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 4px;
 }
 
-.dsh-models-custom-model-row {
-  grid-template-columns:
-    minmax(96px, 1fr)
-    minmax(96px, 1fr)
-    minmax(72px, 0.6fr)
-    minmax(72px, 0.6fr)
-    auto;
+.dsh-models-model-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--dsh-muted);
+}
+
+.dsh-models-model-card-head button {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+
+.dsh-models-model-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.dsh-models-model-field > span {
+  color: var(--dsh-muted);
+}
+
+.dsh-models-model-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
 }
 
 .dsh-settings-plugins,
@@ -1864,8 +1887,6 @@ body,
   }
 
   .dsh-models-field,
-  .dsh-models-model-row,
-  .dsh-models-custom-model-row,
   .dsh-plugin-field,
   .dsh-plugin-inventory li,
   .dsh-web-search-field,
