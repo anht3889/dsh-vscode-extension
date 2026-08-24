@@ -30,6 +30,7 @@ function hooks() {
       getMcpServer: vi.fn(),
       getMcpLogs: vi.fn(),
       runMcpOperation: vi.fn(),
+      discoverMcpOAuth: vi.fn(),
       mutate: vi.fn(),
       setWebSearchConfig: vi.fn(),
       setCredential: vi.fn(),
@@ -305,5 +306,19 @@ describe("dispatchCommand", () => {
     dispatchCommand(inertCtx, message, h);
 
     expect(h.runner.runMcpOperation).toHaveBeenCalledWith(message);
+  });
+
+  it("routes an MCP OAuth discovery request to the retained coordinator", () => {
+    const h = hooks();
+    const message: Extract<InboundMessage, { kind: "discoverMcpOAuth" }> = {
+      kind: "discoverMcpOAuth",
+      requestId: "discover-1",
+      url: "https://mcp.example.com/mcp",
+    };
+
+    dispatchCommand(inertCtx, message, h);
+
+    expect(h.runner.discoverMcpOAuth).toHaveBeenCalledWith(message);
+    expect(h.runner.runMcpOperation).not.toHaveBeenCalled();
   });
 });

@@ -93,14 +93,15 @@ interface McpManagementService {
   setSecrets(id: string, secrets: Record<string, string>): Promise<void>;
   describeSecrets?(id: string): Promise<Record<string, { configured: boolean }>>;
   onCatalogChanged?(listener: () => void): () => void;
+  discoverOAuth?(serverUrl: string): Promise<McpOAuthDiscoveryLike>;
 }
 ```
 
 `McpServerRecordLike`, `McpConnectionStatusLike`, `McpToolInfoLike`, and `McpLogEntryLike` are bridge-local mirrors of the plugin's data-only types, with `id` as a plain `string` because the plugin's brand is a compile-time-only nominal type that the bridge cannot import.
 
-Required members are the thirteen non-optional entries above. The probe rejects a service missing any of them. `describeSecrets` and `onCatalogChanged` are optional at the type level and degrade explicitly: without `describeSecrets` the UI reports every server secret as `unknown` and says so; without `onCatalogChanged` the section relies on its own polling and its own command results, and no push invalidation is emitted.
+Required members are the thirteen non-optional entries above. The probe rejects a service missing any of them. `describeSecrets`, `onCatalogChanged`, and `discoverOAuth` are optional at the type level and degrade explicitly: without `describeSecrets` the UI reports every server secret as `unknown` and says so; without `onCatalogChanged` the section relies on its own polling and its own command results, and no push invalidation is emitted; without `discoverOAuth` the MCP view reports `oauth.discovery` as `unavailable`, the editor hides its Discover button, and the bridge refuses a discovery command that arrives anyway.
 
-`startOAuth`, `discoverOAuth`, `oauthCallbackPaths`, and `handleOAuthCallback` are deliberately absent from the bridge's service. They require a callback origin, which the `vscode` profile cannot supply (section 5).
+`startOAuth`, `oauthCallbackPaths`, and `handleOAuthCallback` are deliberately absent from the bridge's service. They require the profile to receive a redirect, which the `vscode` profile cannot do (section 5).
 
 **Recommendation.** Do not change `dsh-mcp-management` to ship this phase; the installed bundle already satisfies the probe. In the next MCP release, promote `describeSecrets(id)` and `onCatalogChanged(listener)` from incidental runtime methods to declared members of `McpRuntime` in `@anht3889/dsh-mcp-mgmt-mcp`, so that secret-state reporting and catalog change notification become contract rather than accident for every consumer. Keep the bridge's structural service and its optional treatment of both members regardless, because the extension must run against installed versions it did not build.
 
@@ -484,9 +485,9 @@ Every bound is a safety valve above a realistic install, never a product limit. 
 | Web Search view nodes | 256 |
 | Projection depth for any new view | 16 |
 
-`SETTINGS_WIRE_SCAN_NODE_LIMIT` stays at 65,536: it exceeds the largest producer, a maximal MCP list message at 36,874 visited nodes including its three-node envelope, and its 40,960 bridge ceiling. The Models view is the second-largest producer. A cap-consistency test asserts that relation for each new ceiling, so raising a bridge cap past the scan budget fails the suite instead of turning a legitimate large message into a suspected leak.
+`SETTINGS_WIRE_SCAN_NODE_LIMIT` stays at 65,536: it exceeds the largest producer, a maximal MCP list message at 36,876 visited nodes including its three-node envelope, and its 40,960 bridge ceiling. The Models view is the second-largest producer. A cap-consistency test asserts that relation for each new ceiling, so raising a bridge cap past the scan budget fails the suite instead of turning a legitimate large message into a suspected leak.
 
-The MCP list ceiling accounts for the validator's actual scan cost: one maximal list item costs 576 visited nodes because the mutually exclusive transports cannot emit `command` and `url` together, so 64 items plus the seven-node view shell cost 36,871 nodes. The three-node message envelope raises the total to 36,874. The 40,960 ceiling admits that documented maximum while remaining below the 65,536 wire budget; 8,192 would reject a payload that satisfied every per-collection cap.
+The MCP list ceiling accounts for the validator's actual scan cost: one maximal list item costs 576 visited nodes because the mutually exclusive transports cannot emit `command` and `url` together, so 64 items plus the nine-node view shell cost 36,873 nodes. The three-node message envelope raises the total to 36,876. The 40,960 ceiling admits that documented maximum while remaining below the 65,536 wire budget; 8,192 would reject a payload that satisfied every per-collection cap.
 
 Numeric fields are validated as finite numbers in their documented ranges: `toolCallTimeoutMs` and every `reconnect` duration must be positive integers, `maxAttempts` a non-negative integer, `attempt` and `nextDelayMs` non-negative, `toolCount` and `disabledToolCount` non-negative, `next` a non-negative integer. Timestamps are non-empty strings; the bridge emits ISO-8601 values produced by the plugin and does not reformat them.
 
@@ -546,7 +547,7 @@ A server that disappears from the list while selected clears the selection, clos
 
 ### Dialogs
 
-The server editor is an inline panel inside the section, like the Models provider editor, not a nested dialog. It exposes transport choice, name, `stdio` command, args, env pairs, cwd, `streamable-http` url, auth kind, header names with write-only value inputs, the OAuth configuration fields, `toolCallTimeoutMs`, and the four reconnect fields. Transport choice hides the fields the other transport does not use, and the bridge omits them from the record.
+The server editor is a nested dialog over the section, matching the plugin's own Settings UI. It exposes transport choice, name, `stdio` command, args, `streamable-http` url, auth kind, header names with write-only value inputs, the OAuth configuration fields, and OAuth discovery; env pairs, cwd, `toolCallTimeoutMs`, and the four reconnect fields sit behind an Advanced disclosure. Transport choice hides the fields the other transport does not use, and the bridge omits them from the record.
 
 Delete and Clear OAuth tokens use the existing labelled confirmation dialog: focus starts on Cancel, Escape dismisses, focus returns to the invoking control. Delete states that the plugin also wipes that server's stored secrets. Clear OAuth tokens states that the server disconnects and stays down until it is authorized again from DSH Web.
 
@@ -556,7 +557,9 @@ Header and client-secret inputs are `type="password"`, live only in component st
 
 ### OAuth in this phase
 
-The `vscode` profile mounts no web server and configures no `publicOrigin`, so the plugin cannot name a redirect origin. `startOAuth` and `discoverOAuth` would throw when called, so the section never calls them and never renders an Authorize or Discover button.
+The `vscode` profile mounts no web server and configures no `publicOrigin`, so the plugin cannot name a redirect origin. `startOAuth` would throw when called, so the section never calls it and never renders an Authorize button.
+
+`discoverOAuth` is offered instead of deferred, because the launched profile decides whether it resolves: a profile that configures `publicOrigin` or runs a web server discovers successfully, and the extension cannot know which profile it launched. The editor renders Discover from server URL for an OAuth-over-`streamable-http` draft whenever the mounted runtime exposes `discoverOAuth`, and the view reports `oauth.discovery` as `unavailable` when it does not, which hides the button and says endpoints must be entered manually. A profile without a callback origin surfaces the plugin's own refusal verbatim under the button, like every other plugin rejection. Discovery fills `clientId`, `authorizeUrl`, `tokenUrl`, and scopes, but never a client secret: Dynamic Client Registration can issue one, and the bridge reports only that it was issued so the user re-enters it into the write-only Client secret input.
 
 OAuth is nevertheless a fully supported configuration type. The editor lets the user create and edit an `oauth` server with all five fields, and the section shows a persistent note on any OAuth server: authorization must be completed from DSH Web, after which the editor uses the tokens the manager stored. That is accurate — token refresh uses the refresh-token grant, which carries no redirect URI, so an already-authorized server keeps working in the editor indefinitely. `OAUTH_CLIENT_SECRET` remains settable here, and Clear OAuth tokens remains available. The UI never states that OAuth is unsupported.
 
@@ -769,7 +772,7 @@ Both catalogs and both secret stores live under the same `$DSH_HOME` paths for t
 ## 14. Rulings and known deferrals
 
 1. OAuth authorization launch and callback handling are deferred. The `vscode` profile has no web server and no `publicOrigin`, so no redirect can be received. OAuth remains a first-class configuration type, existing tokens keep working through refresh, and the UI directs authorization to DSH Web. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
-2. OAuth endpoint discovery is deferred with authorization, for the same reason: the plugin's discovery path composes a redirect URI and would throw without an origin. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
+2. OAuth endpoint discovery is offered, unlike authorization, because it depends on the launched profile rather than on receiving a redirect. `discoverOAuth` is an optional member of the bridge's structural MCP service, so a runtime that lacks it reports `discovery: "unavailable"`, and a runtime that has it but cannot name a callback origin refuses per request with its own message. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
 3. No dynamic plugin-UI framework. The extension ships UI for these two known capabilities only. A third-party plugin gains no editor settings surface; adding one is a separate design with its own security review.
 4. Web Search keys cannot be unset from the editor, because the runtime offers no unset and writes non-empty values only. The UI says a key can be replaced but not removed. Unset arrives when the plugin supports it.
 5. Web Search secret `source` is not reported, because the runtime reports only a configured flag. Adding source reporting is a plugin-side change.
@@ -785,9 +788,10 @@ Both catalogs and both secret stores live under the same `$DSH_HOME` paths for t
 2. `@anht3889/dsh-web-search-service` exists, the manager plugin publishes `ctx.webSearchManager`, the same provider instance stays registered on `ctx.web`, and the service exposes exactly `getCatalog`, `putCatalog`, `describeSecrets`, `putSecrets`, `available`, and `onChanged`.
 3. The bridge imports nothing from `@anht3889/*`, reads both services through local structural interfaces and a bounded member probe, and typechecks and builds in a workspace where neither plugin is installed.
 4. `dsh-mcp-management` needs no change for this phase, and the spec records the recommendation to declare `describeSecrets` and `onCatalogChanged` on `McpRuntime` in a later release.
-5. Protocol version is 6; the contract validates the five new inbound kinds and five new outbound kinds as closed discriminated families, with no `@deepseek-ai/*` or `@anht3889/*` type on the wire.
+5. Protocol version is 6; the contract validates the six new inbound kinds and six new outbound kinds as closed discriminated families, with no `@deepseek-ai/*` or `@anht3889/*` type on the wire.
 6. The MCP section lists servers with live status, opens a detail pane with tools and secret state, adds, edits, deletes, enables, disables, connects, disconnects, toggles tools, stores write-only header and client secrets with generic server/ref errors on failure, reads incremental logs, and configures OAuth servers without offering an authorization launch.
 7. The MCP section states that OAuth authorization must be completed from DSH Web, never states that OAuth is unsupported, and keeps Clear OAuth tokens available.
+7a. An OAuth-over-`streamable-http` draft offers Discover from server URL while the mounted runtime exposes discovery, fills the discovered client id, endpoints, and scopes, hides the button and explains manual entry when the runtime exposes no discovery, and reports a registration-issued client secret as text to re-enter rather than carrying its value on the wire.
 8. The Web Search section selects Tavily, Brave, or SearXNG, edits per-engine base URLs, stores write-only Tavily and Brave keys, reports availability, applies changes live within the editor process, and reports a partial key failure with a generic ref-only message alongside a committed catalog.
 9. While the external web-search service is mounted, the Plugins section omits the core `web-search-deepseek` card and its namespace; while it is absent, that card is projected unchanged.
 10. No outbound message, reducer state, controller snapshot, retained webview state, log, or snapshot contains a secret value; secret-operation failures use extension-owned generic messages naming only the server id or secret ref; and the contract's outbound scan covers every new family.

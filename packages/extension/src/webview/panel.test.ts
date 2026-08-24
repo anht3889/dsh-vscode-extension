@@ -1139,4 +1139,49 @@ describe("MCP authorize URL host open", () => {
     expect(openExternal).not.toHaveBeenCalled();
     expect(postMessage).toHaveBeenCalledWith(message);
   });
+
+  it("opens an HTTP authorize URL", () => {
+    const postMessage = vi.fn();
+    const provider = new DshChatProvider({} as never, {} as never);
+    Object.assign(provider as object, {
+      view: { webview: { postMessage } },
+    });
+    const message: OutboundMessage = {
+      kind: "mcpOperation",
+      requestId: "auth-http",
+      result: {
+        ok: true,
+        authorizeUrl: "http://127.0.0.1:54321/authorize",
+      },
+    };
+
+    deliver(provider, message);
+
+    expect(openExternal).toHaveBeenCalledOnce();
+    expect(openExternal.mock.calls[0]?.[0].toString()).toBe(
+      "http://127.0.0.1:54321/authorize",
+    );
+    expect(postMessage).toHaveBeenCalledWith(message);
+  });
+
+  it("forwards but does not open a non-HTTP authorize URL", () => {
+    const postMessage = vi.fn();
+    const provider = new DshChatProvider({} as never, {} as never);
+    Object.assign(provider as object, {
+      view: { webview: { postMessage } },
+    });
+    const message: OutboundMessage = {
+      kind: "mcpOperation",
+      requestId: "auth-data",
+      result: {
+        ok: true,
+        authorizeUrl: "data:text/html,not-an-authorize-page",
+      },
+    };
+
+    deliver(provider, message);
+
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(message);
+  });
 });

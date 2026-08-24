@@ -223,7 +223,7 @@ describe.each([
   ["zh", "传输方式", "命令", "身份验证", "保存"],
 ] as const)("McpServerEditor locale %s", (locale, transport, command, auth, save) => {
   it("uses a dialog and keeps OAuth, timeout, and reconnect fields advanced", () => {
-    setup(locale);
+    setup(locale, false, "available", "available");
     expect(screen.getByRole("dialog", {
       name: locale === "en" ? "Add MCP server" : "添加 MCP 服务器",
     })).toBeVisible();
@@ -258,7 +258,7 @@ describe.each([
     expect(screen.getByRole("button", {
       name: locale === "en" ? "Discover from server URL" : "从服务 URL 自动发现",
     })).toBeVisible();
-    expect(screen.queryByRole("button", { name: /Authorize|授权/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Authorize|授权/ })).toBeDisabled();
   });
 
   it("localizes the refusal and the offending-field hints", () => {
@@ -337,6 +337,23 @@ describe("OAuth authorization", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Add & Authorize" })).toBeNull();
+  });
+
+  it("expands Advanced to explain an invalid manual OAuth draft", () => {
+    setup();
+    selectOAuthHttp();
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Manual" },
+    });
+
+    expect(screen.getByRole("button", { name: "Advanced" }))
+      .toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByLabelText("Client ID")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(screen.getByText(/must be completed in DSH Web/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   // Provisioning writes a new record, so editing an authorized server offers

@@ -1312,23 +1312,15 @@ body,
 .dsh-mcp-server-list,
 .dsh-mcp-detail,
 .dsh-mcp-editor,
-.dsh-mcp-secondary,
-.dsh-mcp-oauth-fields {
+.dsh-mcp-oauth-fields,
+.dsh-mcp-advanced {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 12px;
 }
 
-.dsh-mcp-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  gap: 12px;
-  min-width: 0;
-}
-
 .dsh-mcp-list-heading,
-.dsh-mcp-row-actions,
 .dsh-mcp-secret-request {
   display: flex;
   flex-wrap: wrap;
@@ -1358,6 +1350,13 @@ body,
   border-radius: 10px;
 }
 
+.dsh-mcp-server-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
 .dsh-mcp-server-row[aria-current="true"] {
   border-color: var(--vscode-focusBorder, var(--dsh-accent));
 }
@@ -1382,17 +1381,6 @@ body,
   color: var(--dsh-muted);
 }
 
-.dsh-mcp-status,
-.dsh-mcp-server-row > .dsh-settings-badge {
-  display: block;
-  margin-top: 7px;
-  overflow-wrap: anywhere;
-}
-
-.dsh-mcp-row-actions {
-  margin-top: 9px;
-}
-
 .dsh-mcp-tools,
 .dsh-mcp-secrets {
   display: flex;
@@ -1403,13 +1391,15 @@ body,
   list-style: none;
 }
 
-.dsh-mcp-tools label {
+.dsh-mcp-tools li {
   display: flex;
-  align-items: start;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--dsh-border);
 }
 
-.dsh-mcp-tools label span,
 .dsh-mcp-tools small {
   display: block;
   min-width: 0;
@@ -1435,8 +1425,96 @@ body,
   overflow-wrap: anywhere;
 }
 
+.dsh-mcp-discover {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+  background: var(--dsh-input);
+}
+
+.dsh-mcp-discover p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .dsh-mcp-oauth-note p {
   margin: 0 0 8px;
+}
+
+.dsh-mcp-detail-header,
+.dsh-mcp-detail-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dsh-mcp-detail-meta {
+  margin: 4px 0 0;
+  color: var(--dsh-muted);
+}
+
+.dsh-mcp-detail-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.dsh-mcp-disclosure {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  color: var(--dsh-muted);
+  background: transparent;
+  text-decoration: underline;
+}
+
+.dsh-mcp-switch {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.dsh-mcp-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 26px;
+  height: 14px;
+  flex: none;
+  border-radius: 7px;
+  background: var(--dsh-border);
+}
+
+.dsh-mcp-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--vscode-editor-background, #fff);
+  transition: transform 120ms ease;
+}
+
+.dsh-mcp-switch-track[data-on="true"] {
+  background: var(--dsh-accent);
+}
+
+.dsh-mcp-switch-track[data-on="true"] .dsh-mcp-switch-thumb {
+  transform: translateX(12px);
 }
 
 .dsh-mcp-field > span {
@@ -1463,10 +1541,16 @@ body,
 
 .dsh-mcp-field input,
 .dsh-mcp-field select,
+.dsh-mcp-field textarea,
 .dsh-mcp-repeat input {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
+}
+
+.dsh-mcp-field textarea {
+  resize: vertical;
+  font: inherit;
 }
 
 .dsh-mcp-editor fieldset {
@@ -1635,11 +1719,43 @@ body,
   margin-top: 10px;
 }
 
-.dsh-settings-confirmation-scrim {
+.dsh-settings-confirmation-scrim,
+.dsh-settings-nested-scrim {
   position: absolute;
   inset: 0;
   z-index: 1;
   background: color-mix(in srgb, var(--vscode-editor-background, #000) 55%, transparent);
+}
+
+.dsh-settings-nested-dialog {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  box-sizing: border-box;
+  width: min(560px, calc(100% - 32px));
+  max-height: min(80vh, 720px);
+  padding: 12px;
+  border: 1px solid var(--vscode-focusBorder, var(--dsh-accent));
+  border-radius: 10px;
+  background: var(--vscode-editorWidget-background, var(--dsh-bg));
+  transform: translate(-50%, -50%);
+}
+
+.dsh-settings-nested-dialog > .dsh-mcp-detail,
+.dsh-settings-nested-dialog > .dsh-mcp-editor {
+  max-height: calc(min(80vh, 720px) - 24px);
+  border: 0;
+  padding: 0;
+}
+
+.dsh-settings-nested-dialog > .dsh-mcp-detail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.dsh-settings-nested-dialog > .dsh-mcp-editor {
+  overflow-y: auto;
 }
 
 .dsh-settings-confirmation {
@@ -1687,12 +1803,6 @@ body,
 .dsh-settings-nav-item:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, var(--dsh-accent));
   outline-offset: -1px;
-}
-
-@media (max-width: 775px) {
-  .dsh-mcp-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 @media (max-width: 560px) {
@@ -1759,7 +1869,7 @@ body,
   .dsh-plugin-field,
   .dsh-plugin-inventory li,
   .dsh-web-search-field,
-  .dsh-mcp-layout,
+  .dsh-mcp-server-row,
   .dsh-mcp-repeat > div,
   .dsh-mcp-reconnect,
   .dsh-mcp-log-row {

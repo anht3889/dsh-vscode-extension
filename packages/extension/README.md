@@ -91,8 +91,7 @@ replaced but cannot be unset here.
 - If that row is omitted, callbacks still work and `/mcp-management` is
   reachable on loopback, matching DSH Web's local API.
 - **Add & Authorize** needs a plugin build that implements `discoverOAuth`,
-  `startOAuth`, and `oauthRedirectOrigin` (this workspace's MCP manager after
-  Task 1).
+  `startOAuth`, and `oauthRedirectOrigin`, such as this workspace's MCP manager.
 - Advanced remains for providers that do not dynamically register a client.
 - A client registered only for DSH Web's port cannot be reused against
   vscode's ephemeral port without re-registration.

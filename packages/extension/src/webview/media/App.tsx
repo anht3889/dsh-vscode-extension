@@ -10,6 +10,7 @@ import type {
   AskAnswerWire,
   FileReferenceItem,
   McpLogsMessage,
+  McpOAuthDiscoveryMessage,
   McpOperationMessage,
   McpServerMessage,
   SettingsCapabilitiesMessage,
@@ -324,6 +325,10 @@ export function App(): JSX.Element {
         } else if (data.kind === "mcpOperation") {
           receiveMcpReply((controller) =>
             controller.receiveOperation(data as McpOperationMessage));
+        } else if (data.kind === "mcpOAuthDiscovery") {
+          mcpControllerRef.current?.receiveDiscovery(
+            data as McpOAuthDiscoveryMessage,
+          );
         } else if (data.kind === "agentPresetContent") {
           agentPresetsControllerRef.current?.receiveContent(
             data as AgentPresetContentMessage,

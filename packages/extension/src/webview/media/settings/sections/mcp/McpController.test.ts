@@ -481,7 +481,7 @@ describe("McpController OAuth authorization", () => {
   });
 
   it("waits after authorization launch and clears on failure or dismissal", () => {
-    const { controller } = bench();
+    const { controller, sent } = bench();
     controller.updateView(LOOPBACK_VIEW);
     oauthDraft(controller);
     controller.setEditorField("serverName", "glean");
@@ -493,6 +493,12 @@ describe("McpController OAuth authorization", () => {
       "https://idp.example/authorize",
     ))).toBe(true);
     expect(controller.snapshot().authorizing).toBe(true);
+    expect(controller.snapshot().editor).toMatchObject({
+      mode: "edit",
+      serverId: "alpha",
+    });
+    expect(controller.provisionOAuth()).toBe(false);
+    expect(sent).toHaveLength(1);
     controller.closeEditor();
     expect(controller.snapshot().authorizing).toBe(false);
 

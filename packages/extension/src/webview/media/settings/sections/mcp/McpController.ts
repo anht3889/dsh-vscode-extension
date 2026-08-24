@@ -972,6 +972,13 @@ export class McpController {
     if (operation.stage === "provision" || operation.stage === "authorize") {
       if (returnedDetail !== undefined) {
         this.authorizingServerId = returnedDetail.server.id;
+        if (
+          operation.stage === "provision" &&
+          this.operationOwnsEditor(operation)
+        ) {
+          this.editor = draftFromDetail(returnedDetail);
+          this.editorBaseline = structuredClone(comparableDraft(this.editor));
+        }
       }
       this.notify();
       return true;

@@ -101,6 +101,9 @@ export function dispatchCommand(
     case "runMcpOperation":
       hooks.runner.runMcpOperation(msg);
       return;
+    case "discoverMcpOAuth":
+      hooks.runner.discoverMcpOAuth(msg);
+      return;
     case "mutateSettings":
       hooks.runner.mutate(msg);
       return;

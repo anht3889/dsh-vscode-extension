@@ -153,6 +153,13 @@ export function McpServerEditor({
     oauthDiscovery === "available" &&
     draft.transport === "streamable-http" &&
     draft.auth.kind === "oauth";
+  const oauthNeedsAdvanced = !canProvision &&
+    !valid &&
+    draft.transport === "streamable-http" &&
+    draft.auth.kind === "oauth";
+  useEffect(() => {
+    if (oauthNeedsAdvanced) setAdvancedOpen(true);
+  }, [oauthNeedsAdvanced]);
   const provisionReady = draft.serverName.trim() !== "" &&
     draft.url.trim() !== "" &&
     !disabled &&

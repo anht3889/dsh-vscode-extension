@@ -815,7 +815,14 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       && m.result.ok
       && m.result.authorizeUrl !== undefined
     ) {
-      void vscode.env.openExternal(vscode.Uri.parse(m.result.authorizeUrl));
+      try {
+        const authorizeUrl = new URL(m.result.authorizeUrl);
+        if (authorizeUrl.protocol === "http:" || authorizeUrl.protocol === "https:") {
+          void vscode.env.openExternal(vscode.Uri.parse(authorizeUrl.href));
+        }
+      } catch {
+        // Malformed authorize URLs are still forwarded so the webview can settle.
+      }
     }
     this.updateStatus(m);
     this.view?.webview.postMessage(m);

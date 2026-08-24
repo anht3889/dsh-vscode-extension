@@ -1150,6 +1150,7 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     getMcpServer: settingsCoordinator.getMcpServer,
     getMcpLogs: settingsCoordinator.getMcpLogs,
     runMcpOperation: settingsCoordinator.runMcpOperation,
+    discoverMcpOAuth: settingsCoordinator.discoverMcpOAuth,
     mutate: settingsCoordinator.mutate,
     setWebSearchConfig: settingsCoordinator.setWebSearchConfig,
     setCredential: settingsCoordinator.setCredential,

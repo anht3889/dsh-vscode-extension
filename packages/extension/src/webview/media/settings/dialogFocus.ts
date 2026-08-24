@@ -27,10 +27,11 @@ export function useNestedDialogFocus(
   initialRef: RefObject<HTMLElement>,
   saving: boolean,
   onEscape: () => void,
+  focusInitial = true,
 ): void {
   useEffect(() => {
     if (!active) return;
-    initialRef.current?.focus();
+    if (focusInitial) initialRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -58,5 +59,5 @@ export function useNestedDialogFocus(
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [active, dialogRef, initialRef, onEscape, saving]);
+  }, [active, dialogRef, focusInitial, initialRef, onEscape, saving]);
 }
