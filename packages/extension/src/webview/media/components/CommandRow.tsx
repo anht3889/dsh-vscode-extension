@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import type { TimelineRow } from "../store.js";
 
 type CommandTimelineRow = Extract<TimelineRow, { kind: "command" }>;
@@ -10,6 +10,7 @@ interface CommandRowProps {
 /** Render one expandable slash-command invocation and its output. */
 export function CommandRow({ row }: CommandRowProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
+  const outputId = useId();
   const args = row.args?.trimStart() ?? "";
   const invocation = `/${row.name}${args === "" ? "" : ` ${args}`}`;
 
@@ -17,11 +18,13 @@ export function CommandRow({ row }: CommandRowProps): JSX.Element {
     <article className="dsh-command-row" aria-label="Command">
       <button
         className="dsh-row-toggle"
-        aria-label="Command"
         aria-expanded={expanded}
+        aria-controls={outputId}
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="dsh-row-title">{invocation}</span>
+        {/* The whitespace between spans separates the words of the toggle's
+            accessible name; flex layout drops whitespace-only text nodes. */}
+        <span className="dsh-row-title">{invocation}</span>{" "}
         <span className={`dsh-row-status dsh-row-status-${row.status}`}>
           {row.status}
         </span>
@@ -29,9 +32,13 @@ export function CommandRow({ row }: CommandRowProps): JSX.Element {
           {expanded ? "▾" : "▸"}
         </span>
       </button>
-      {expanded && row.output !== undefined ? (
-        <pre className="dsh-row-result">{row.output}</pre>
-      ) : null}
+      <pre
+        className="dsh-row-result"
+        id={outputId}
+        hidden={!expanded || row.output === undefined}
+      >
+        {expanded ? row.output : null}
+      </pre>
     </article>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 
 interface ThinkingRowProps {
   text: string;
@@ -20,6 +20,7 @@ export function latestLine(text: string): string {
 /** Render one expandable model-reasoning timeline row. */
 export function ThinkingRow({ text, running }: ThinkingRowProps): JSX.Element {
   const [expanded, setExpanded] = useState(running);
+  const textId = useId();
   const wasRunning = useRef(running);
 
   useEffect(() => {
@@ -33,8 +34,8 @@ export function ThinkingRow({ text, running }: ThinkingRowProps): JSX.Element {
     <article className="dsh-think" aria-label="Think">
       <button
         className="dsh-row-toggle"
-        aria-label="Think"
         aria-expanded={expanded}
+        aria-controls={textId}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="dsh-row-title">Think</span>
@@ -42,7 +43,9 @@ export function ThinkingRow({ text, running }: ThinkingRowProps): JSX.Element {
           {expanded ? "▾" : "▸"}
         </span>
       </button>
-      <div className="dsh-row-summary">{expanded ? text : summary}</div>
+      <div className="dsh-row-summary" id={textId}>
+        {expanded ? text : summary}
+      </div>
     </article>
   );
 }

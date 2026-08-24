@@ -11,11 +11,11 @@ describe("ThinkingRow", () => {
   it("starts a running row expanded with its full text", () => {
     render(<ThinkingRow text={"first thought\nlatest thought"} running />);
 
-    expect(screen.getByRole("button", { name: "Think" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    expect(screen.getByText(/first thought\s+latest thought/)).toBeVisible();
+    const button = screen.getByRole("button", { name: "Think" });
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    const reasoning = screen.getByText(/first thought\s+latest thought/);
+    expect(reasoning).toBeVisible();
+    expect(button.getAttribute("aria-controls")).toBe(reasoning.id);
   });
 
   it("collapses a completed row on first mount to its first line", () => {

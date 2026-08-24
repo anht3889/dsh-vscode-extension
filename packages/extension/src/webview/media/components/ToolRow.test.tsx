@@ -19,6 +19,24 @@ const baseRow: ToolTimelineRow = {
   diffs: [],
 };
 
+/** A result payload that records every read of its only field. */
+function countingPayload(): { payload: unknown; reads: () => number } {
+  let reads = 0;
+  return {
+    payload: {
+      get detail(): string {
+        reads += 1;
+        return "payload detail";
+      },
+    },
+    reads: () => reads,
+  };
+}
+
+function toggle(name: RegExp | string): HTMLElement {
+  return screen.getByRole("button", { name });
+}
+
 afterEach(cleanup);
 
 describe("ToolRow", () => {
@@ -27,19 +45,33 @@ describe("ToolRow", () => {
     (status) => {
       render(<ToolRow row={{ ...baseRow, status }} />);
 
-      expect(screen.getByRole("button", { name: "read" })).toHaveAttribute(
-        "aria-expanded",
-        "false",
-      );
+      expect(toggle(/read/)).toHaveAttribute("aria-expanded", "false");
       expect(screen.getByText("/src/a.ts")).toBeVisible();
       expect(screen.getByText(status)).toBeVisible();
       expect(screen.queryByText("fallback result")).toBeNull();
     },
   );
 
+  it("names the toggle by what it shows and points it at the details region", () => {
+    render(<ToolRow row={baseRow} />);
+
+    const button = toggle("read /src/a.ts ok");
+    const details = document.getElementById(
+      button.getAttribute("aria-controls") ?? "",
+    );
+    expect(details).not.toBeNull();
+    expect(details).not.toBeVisible();
+    expect(screen.getByLabelText("read", { selector: "article" })).toContainElement(
+      details,
+    );
+
+    fireEvent.click(button);
+    expect(details).toBeVisible();
+  });
+
   it("shows malformed raw arguments and falls back to result text when expanded", () => {
     render(<ToolRow row={{ ...baseRow, argsRaw: "{broken" }} />);
-    fireEvent.click(screen.getByRole("button", { name: "read" }));
+    fireEvent.click(toggle(/read/));
 
     expect(screen.getByText("{broken")).toBeVisible();
     expect(screen.getByText("fallback result")).toBeVisible();
@@ -65,7 +97,7 @@ describe("ToolRow", () => {
     );
 
     expect(screen.getByText("Run tests")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "pnpm test" }));
+    fireEvent.click(toggle(/pnpm test/));
     expect(screen.getByText(/Tests passed/)).toBeVisible();
     expect(screen.queryByText("fallback result")).toBeNull();
   });
@@ -82,7 +114,7 @@ describe("ToolRow", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "read" }));
+    fireEvent.click(toggle(/read/));
 
     expect(screen.getByText(/plain/)).toBeVisible();
     expect(screen.getByText(/"count": 2/)).toBeVisible();
@@ -100,9 +132,52 @@ describe("ToolRow", () => {
     );
 
     expect(screen.queryByText("old")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "read" }));
+    fireEvent.click(toggle(/read/));
     expect(screen.getByText("/src/a.ts")).toBeVisible();
     expect(screen.getByText("old")).toBeVisible();
     expect(screen.getByText("new")).toBeVisible();
+  });
+
+  it("leaves a collapsed result payload untouched and formats it once expanded", () => {
+    const { payload, reads } = countingPayload();
+    const row: ToolTimelineRow = {
+      ...baseRow,
+      resultView: { card: "generic", content: [payload] },
+    };
+    const { rerender } = render(<ToolRow row={row} />);
+
+    expect(reads()).toBe(0);
+
+    fireEvent.click(toggle(/read/));
+    expect(screen.getByText(/payload detail/)).toBeVisible();
+    const formatted = reads();
+    expect(formatted).toBeGreaterThan(0);
+
+    // A streamed delta elsewhere in the timeline rerenders every row with the
+    // same row object; that must not reformat this payload.
+    rerender(<ToolRow row={row} />);
+    expect(reads()).toBe(formatted);
+  });
+
+  it("refreshes the summary, status, and result when the row changes", () => {
+    const { rerender } = render(<ToolRow row={baseRow} />);
+    fireEvent.click(toggle(/read/));
+
+    rerender(
+      <ToolRow
+        row={{
+          ...baseRow,
+          argsRaw: "{\"path\":\"/src/b.ts\"}",
+          status: "error",
+          resultText: "later result",
+        }}
+      />,
+    );
+
+    expect(toggle(/read/)).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("/src/b.ts")).toBeVisible();
+    expect(screen.getByText("error")).toBeVisible();
+    expect(screen.getByText("later result")).toBeVisible();
+    expect(screen.queryByText("fallback result")).toBeNull();
   });
 });
