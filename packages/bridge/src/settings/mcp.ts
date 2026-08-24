@@ -659,7 +659,7 @@ export async function runMcpOperation(
       assertOAuthDiscovery(discovered);
       if (discovered.clientId.length === 0) {
         throw new Error(
-          "OAuth discovery did not register a client. Open Advanced and enter a Client ID, or retry after the loopback origin is available.",
+          "OAuth discovery filled endpoints but registered no client ID. Enter a client ID under Advanced.",
         );
       }
       const record = composeRecord(

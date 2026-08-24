@@ -1189,11 +1189,49 @@ describe("MCP mutations", () => {
       url: "https://mcp.example/rpc",
       enabled: true,
     })).rejects.toThrow(
-      "OAuth discovery did not register a client. Open Advanced and enter a Client ID, or retry after the loopback origin is available.",
+      "OAuth discovery filled endpoints but registered no client ID. Enter a client ID under Advanced.",
     );
     expect(upsert).not.toHaveBeenCalled();
     expect(startOAuth).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["absent", {}],
+    ["undefined", { oauthRedirectOrigin: () => undefined }],
+    ["empty", { oauthRedirectOrigin: () => "" }],
+  ])(
+    "refuses provision without upsert when the callback origin is %s",
+    async (_label, originOverride) => {
+      const upsert = vi.fn();
+      const discoverOAuth = vi.fn(async () => ({
+        clientId: "issued",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: [],
+        registered: true,
+      }));
+      const startOAuth = vi.fn(async () => ({
+        authorizeUrl: "https://auth.example/authorize",
+      }));
+
+      await expect(runMcpOperation(contextWith(fakeService({
+        upsert,
+        discoverOAuth,
+        startOAuth,
+        ...originOverride,
+      })), {
+        kind: "provisionOAuthServer",
+        serverName: "Glean",
+        url: "https://mcp.example/rpc",
+        enabled: true,
+      })).rejects.toThrow(
+        "The mounted MCP plugin cannot authorize OAuth servers in this profile",
+      );
+      expect(upsert).not.toHaveBeenCalled();
+      expect(discoverOAuth).not.toHaveBeenCalled();
+      expect(startOAuth).not.toHaveBeenCalled();
+    },
+  );
 
   it("provisions OAuth and returns its authorize URL without its secret", async () => {
     let stored: McpServerRecordLike | undefined;
