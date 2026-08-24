@@ -623,7 +623,7 @@ export function foldEvent(
       const commandName = typeof name === "string" ? name : "";
       const commandArgs = typeof args === "string" ? args : null;
       return upsertCommand(
-        closeAssistantStreaming(rows),
+        closeThinking(closeAssistantStreaming(rows)),
         commandId,
         event.seq,
         (row) => ({

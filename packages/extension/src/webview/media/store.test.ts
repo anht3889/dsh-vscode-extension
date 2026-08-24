@@ -330,6 +330,39 @@ describe("reduce", () => {
     expect(done.status).toBe("idle");
   });
 
+  it("closes running thinking and streaming assistant rows before command/run", () => {
+    const withRunningRows: UiState = {
+      ...initialState,
+      sessionId: "s1",
+      timeline: [
+        { kind: "thinking", seq: 1, text: "analysis", running: true },
+        { kind: "assistant", seq: 1, text: "partial answer", streaming: true },
+      ],
+    };
+
+    const afterCommand = reduce(
+      withRunningRows,
+      eventMsg("command/run", {
+        commandId: "cmd-1",
+        name: "compact",
+        source: { kind: "user" },
+      }),
+    );
+    expect(afterCommand.timeline).toEqual([
+      { kind: "thinking", seq: 1, text: "analysis", running: false },
+      { kind: "assistant", seq: 1, text: "partial answer", streaming: false },
+      {
+        kind: "command",
+        commandId: "cmd-1",
+        seq: 1,
+        name: "compact",
+        args: null,
+        status: "running",
+      },
+    ]);
+    expect(afterCommand.timeline.some((row) => row.kind === "user")).toBe(false);
+  });
+
   it("folds command/run history and omits unrecorded command input", () => {
     const resumed = reduce(initialState, {
       kind: "history",
