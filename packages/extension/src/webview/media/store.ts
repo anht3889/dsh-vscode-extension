@@ -14,6 +14,7 @@ import type {
   ToolDiff,
   ToolResultView,
 } from "@dsh-vscode/contract";
+import { isSessionEventWire } from "@dsh-vscode/contract";
 import type { ImagesPickedMessage } from "./vscode.js";
 import { formatChipMention } from "./chipMention.js";
 import { filterSlashItems, type SlashGroup } from "./slashFilter.js";
@@ -119,6 +120,8 @@ export type TimelineRow =
       status: "running" | "success" | "error";
       output?: string;
     };
+
+type ToolTimelineRow = Extract<TimelineRow, { kind: "tool" }>;
 
 export interface UiState {
   /** The conversation timeline folded from session events. */
@@ -418,6 +421,112 @@ function lastRowIndex(
   return -1;
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function callViewFromEvent(event: SessionEventWire): ToolCallView | undefined {
+  const candidate: unknown = {
+    type: event.type,
+    seq: event.seq,
+    time: event.time,
+    data: {},
+    view: event.view,
+  };
+  if (!isSessionEventWire(candidate) || candidate.view?.for !== "call") {
+    return undefined;
+  }
+  return candidate.view.view;
+}
+
+function resultViewFromEvent(event: SessionEventWire): ToolResultView | undefined {
+  const candidate: unknown = {
+    type: event.type,
+    seq: event.seq,
+    time: event.time,
+    data: {},
+    view: event.view,
+  };
+  if (!isSessionEventWire(candidate) || candidate.view?.for !== "result") {
+    return undefined;
+  }
+  return candidate.view.view;
+}
+
+function upsertTool(
+  rows: TimelineRow[],
+  callId: string,
+  seq: number,
+  update: (row: ToolTimelineRow) => ToolTimelineRow,
+): TimelineRow[] {
+  const index = lastRowIndex(
+    rows,
+    (row) => row.kind === "tool" && row.callId === callId,
+  );
+  if (index < 0) {
+    return [
+      ...rows,
+      update({
+        kind: "tool",
+        seq,
+        callId,
+        name: "tool",
+        argsRaw: "",
+        status: "running",
+        diffs: [],
+      }),
+    ];
+  }
+  const row = rows[index]!;
+  if (row.kind !== "tool") return rows;
+  return [
+    ...rows.slice(0, index),
+    update(row),
+    ...rows.slice(index + 1),
+  ];
+}
+
+function toolResultBlock(event: SessionEventWire): {
+  callId: string;
+  content: unknown;
+  isError: boolean;
+} | undefined {
+  const message = record(event.data.message);
+  const source = record(message?.source);
+  if (typeof source?.callId !== "string") return undefined;
+  const blocks = message?.content;
+  if (!Array.isArray(blocks)) return undefined;
+  const result = blocks
+    .map(record)
+    .find((block) => block?.type === "tool-result");
+  return {
+    callId: source.callId,
+    content: result?.content,
+    isError: result?.isError === true,
+  };
+}
+
+function diffsFromResultView(view: ToolResultView | undefined): ToolDiff[] {
+  if (view?.card !== "diff" || !Array.isArray(view.diffs)) return [];
+  const diffs: ToolDiff[] = [];
+  for (const diff of view.diffs) {
+    if (
+      typeof diff?.path === "string" &&
+      (typeof diff.oldText === "string" || diff.oldText === null) &&
+      typeof diff.newText === "string"
+    ) {
+      diffs.push({
+        path: diff.path,
+        oldText: diff.oldText ?? "",
+        newText: diff.newText,
+      });
+    }
+  }
+  return diffs;
+}
+
 function closeThinking(rows: TimelineRow[]): TimelineRow[] {
   const index = lastRowIndex(
     rows,
@@ -475,6 +584,30 @@ export function foldEvent(
       const chunk: unknown = event.data.chunk;
       if (typeof chunk !== "object" || chunk === null) return rows;
       const { type, text } = chunk as { type?: unknown; text?: unknown };
+      if (type === "tool-call-delta") {
+        const {
+          id,
+          name,
+          argumentsDelta,
+        } = chunk as {
+          id?: unknown;
+          name?: unknown;
+          argumentsDelta?: unknown;
+        };
+        if (
+          typeof id !== "string" ||
+          typeof argumentsDelta !== "string" ||
+          (name !== undefined && typeof name !== "string")
+        ) {
+          return rows;
+        }
+        return upsertTool(rows, id, event.seq, (row) => ({
+          ...row,
+          ...(name === undefined ? {} : { name }),
+          argsRaw: row.argsRaw + argumentsDelta,
+          status: "running",
+        }));
+      }
       if (typeof text !== "string" || text === "") return rows;
       if (type === "reasoning-delta") {
         const index = lastRowIndex(
@@ -526,12 +659,13 @@ export function foldEvent(
         rows,
         (row) => row.kind === "assistant" && row.streaming,
       );
+      let nextRows = rows;
       if (index >= 0) {
         const row = rows[index]!;
         if (row.kind !== "assistant") return rows;
         // The assembled message is authoritative over the accumulated deltas,
         // except when it holds no text at all (tool-call-only steps).
-        return [
+        nextRows = [
           ...rows.slice(0, index),
           {
             ...row,
@@ -540,12 +674,70 @@ export function foldEvent(
           },
           ...rows.slice(index + 1),
         ];
+      } else if (text !== "") {
+        nextRows = [
+          ...rows,
+          { kind: "assistant", seq: event.seq, text, streaming: false },
+        ];
       }
-      if (text === "") return rows;
-      return [
-        ...rows,
-        { kind: "assistant", seq: event.seq, text, streaming: false },
+      if (!Array.isArray(content)) return nextRows;
+      for (const value of content) {
+        const block = record(value);
+        if (
+          block?.type !== "tool-call" ||
+          typeof block.id !== "string" ||
+          typeof block.name !== "string" ||
+          typeof block.arguments !== "string"
+        ) {
+          continue;
+        }
+        nextRows = upsertTool(nextRows, block.id, event.seq, (row) => ({
+          ...row,
+          name: block.name as string,
+          argsRaw: block.arguments as string,
+          status: "running",
+        }));
+      }
+      return nextRows;
+    }
+
+    case "tool/call": {
+      const { callId, name, arguments: argsRaw } = event.data;
+      if (
+        typeof callId !== "string" ||
+        typeof name !== "string" ||
+        typeof argsRaw !== "string"
+      ) {
+        return rows;
+      }
+      const callView = callViewFromEvent(event);
+      return upsertTool(rows, callId, event.seq, (row) => ({
+        ...row,
+        name,
+        argsRaw,
+        status: "running",
+        ...(callView === undefined ? {} : { callView }),
+      }));
+    }
+
+    case "tool/result": {
+      const result = toolResultBlock(event);
+      if (result === undefined) return rows;
+      const resultView = resultViewFromEvent(event);
+      const metadataDiff = diffFromEventData(event.data);
+      const diffs = [
+        ...(metadataDiff === undefined ? [] : [metadataDiff]),
+        ...diffsFromResultView(resultView),
       ];
+      const resultText = messageText(result.content);
+      const failed = result.isError || record(event.data.error) !== undefined;
+      return upsertTool(rows, result.callId, event.seq, (row) => ({
+        ...row,
+        status: failed ? "error" : "ok",
+        ...(resultText === "" ? {} : { resultText }),
+        ...(resultView === undefined ? {} : { resultView }),
+        diffs,
+      }));
     }
 
     case "assistant/analysis-end":
@@ -1231,7 +1423,9 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         type === "assistant/chunk" ||
         type === "assistant/message" ||
         type === "assistant/analysis-end" ||
-        type === "command/run"
+        type === "command/run" ||
+        type === "tool/call" ||
+        type === "tool/result"
       ) {
         const timeline = foldEvent(state.timeline, msg.event);
         if (type === "command/run") {
@@ -1265,19 +1459,23 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
             status: "thinking",
           };
         }
+        if (type === "tool/result") {
+          const diff = diffFromEventData(msg.event.data);
+          if (timeline === state.timeline && diff === undefined) return state;
+          return {
+            ...state,
+            timeline,
+            ...(diff === undefined
+              ? {}
+              : { diffs: [...state.diffs, diff] }),
+          };
+        }
         return timeline === state.timeline ? state : { ...state, timeline };
       }
       if (type === "command/done") {
         const settled = settlePendingCommand(state);
         if (state.status === "idle" && settled === undefined) return state;
         return { ...state, status: "idle", ...settled };
-      }
-      if (type === "tool/result") {
-        const diff = diffFromEventData(msg.event.data);
-        if (diff !== undefined) {
-          return { ...state, diffs: [...state.diffs, diff] };
-        }
-        return state;
       }
       return state;
     }

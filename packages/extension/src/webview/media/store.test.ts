@@ -5,6 +5,7 @@ import type {
   AskQuestionWire,
   OutboundMessage,
   SlashMenuItem,
+  ToolEventView,
 } from "@dsh-vscode/contract";
 import {
   contextPercent,
@@ -26,6 +27,17 @@ function eventMsg(type: string, data: Record<string, unknown>): EventMessage {
     kind: "event",
     sessionId: "s1",
     event: { type, seq: 1, time: 0, data },
+  };
+}
+
+function toolEventMsg(
+  type: string,
+  data: Record<string, unknown>,
+  view: ToolEventView,
+): EventMessage {
+  return {
+    ...eventMsg(type, data),
+    event: { type, seq: 1, time: 0, data, view },
   };
 }
 
@@ -353,29 +365,287 @@ describe("reduce", () => {
     expect(reduce(pending, foreignEnd)).toBe(pending);
   });
 
-  it("records tool/result diffs into diffs", () => {
-    const s = reduce(
-      initialState,
-      eventMsg("tool/result", {
-        meta: { path: "/x/a.ts", oldText: "a", newText: "b" },
-      }),
-    );
-    expect(s.diffs).toContainEqual({ path: "/x/a.ts", oldText: "a", newText: "b" });
+  it("upserts a running tool from tool-call-delta and tool/call", () => {
+    const first = reduce(initialState, eventMsg("assistant/chunk", {
+      turn: 1,
+      step: 1,
+      chunk: {
+        type: "tool-call-delta",
+        index: 0,
+        id: "c1",
+        name: "bash",
+        argumentsDelta: "{\"command\":",
+      },
+    }));
+    const delta = reduce(first, eventMsg("assistant/chunk", {
+      turn: 1,
+      step: 1,
+      chunk: {
+        type: "tool-call-delta",
+        index: 0,
+        id: "c1",
+        argumentsDelta: "\"ls\"}",
+      },
+    }));
+    expect(delta.timeline).toMatchObject([{
+      kind: "tool",
+      callId: "c1",
+      name: "bash",
+      argsRaw: "{\"command\":\"ls\"}",
+      status: "running",
+    }]);
+
+    const called = reduce(delta, eventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "bash",
+      arguments: "{\"command\":\"ls\"}",
+    }));
+    expect(called.timeline).toHaveLength(1);
+    expect(called.timeline[0]).toMatchObject({
+      kind: "tool",
+      callId: "c1",
+      name: "bash",
+      argsRaw: "{\"command\":\"ls\"}",
+      status: "running",
+    });
   });
 
-  it("ignores tool/result events without a diff-shaped meta", () => {
-    const s = reduce(initialState, eventMsg("tool/result", { meta: { command: "ls" } }));
-    expect(s.diffs).toEqual([]);
+  it("upserts tool calls from the assembled assistant message", () => {
+    const state = reduce(initialState, eventMsg("assistant/message", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "m1",
+        role: "assistant",
+        source: { kind: "model", provider: "p", model: "m" },
+        content: [{
+          type: "tool-call",
+          id: "c1",
+          name: "read",
+          arguments: "{\"path\":\"/a.ts\"}",
+        }],
+      },
+    }));
+    expect(state.timeline).toMatchObject([{
+      kind: "tool",
+      callId: "c1",
+      name: "read",
+      argsRaw: "{\"path\":\"/a.ts\"}",
+      status: "running",
+    }]);
   });
 
-  it("renders argument-only diffs that the host can apply", () => {
-    const s = reduce(
-      initialState,
-      eventMsg("tool/result", {
-        arguments: { path: "/x/a.ts", oldText: "a", newText: "b" },
+  it("stores valid call and result views and ignores malformed views", () => {
+    const called = reduce(initialState, toolEventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "bash",
+      arguments: "{\"command\":\"ls\"}",
+    }, {
+      for: "call",
+      view: {
+        card: "terminal",
+        title: "ls",
+        description: "List files",
+      },
+    }));
+    const done = reduce(called, toolEventMsg("tool/result", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "m1",
+        role: "user",
+        source: { kind: "tool", callId: "c1" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "c1",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        }],
+      },
+    }, {
+      for: "result",
+      view: { card: "terminal", output: "ok", exitCode: 0 },
+    }));
+    expect(done.timeline[0]).toMatchObject({
+      kind: "tool",
+      callView: { card: "terminal", title: "ls", description: "List files" },
+      resultView: { card: "terminal", output: "ok", exitCode: 0 },
+    });
+
+    const malformed = {
+      ...eventMsg("tool/call", {
+        callId: "c2",
+        name: "read",
+        arguments: "{\"path\":\"/a.ts\"}",
       }),
-    );
-    expect(s.diffs).toEqual([
+      event: {
+        type: "tool/call",
+        seq: 1,
+        time: 0,
+        data: {
+          callId: "c2",
+          name: "read",
+          arguments: "{\"path\":\"/a.ts\"}",
+        },
+        view: { for: "call", view: { card: "terminal", title: 42 } },
+      },
+    } as unknown as EventMessage;
+    expect(reduce(initialState, malformed).timeline[0]).toMatchObject({
+      kind: "tool",
+      callId: "c2",
+      name: "read",
+      argsRaw: "{\"path\":\"/a.ts\"}",
+    });
+    expect(reduce(initialState, malformed).timeline[0]).not.toHaveProperty("callView");
+  });
+
+  it("settles tools from tool/result including non-diff results", () => {
+    const running = reduce(initialState, eventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "bash",
+      arguments: "{}",
+    }));
+    const done = reduce(running, eventMsg("tool/result", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "m1",
+        role: "user",
+        source: { kind: "tool", callId: "c1" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "c1",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        }],
+      },
+    }));
+    expect(done.timeline[0]).toMatchObject({
+      kind: "tool",
+      status: "ok",
+      resultText: "ok",
+    });
+    expect(done.diffs).toEqual([]);
+  });
+
+  it("keeps interrupted and failed tool results as errors", () => {
+    for (const error of [
+      { name: "AbortError", code: "interrupted" },
+      { name: "Error", code: "fail" },
+    ]) {
+      const running = reduce(initialState, eventMsg("tool/call", {
+        turn: 1,
+        step: 1,
+        callId: "c1",
+        name: "bash",
+        arguments: "{}",
+      }));
+      const failed = reduce(running, eventMsg("tool/result", {
+        turn: 1,
+        step: 1,
+        message: {
+          id: "m1",
+          role: "user",
+          source: { kind: "tool", callId: "c1" },
+          content: [{
+            type: "tool-result",
+            toolCallId: "c1",
+            content: [],
+            isError: true,
+          }],
+        },
+        error,
+      }));
+      expect(failed.timeline[0]).toMatchObject({ kind: "tool", status: "error" });
+    }
+  });
+
+  it("appends a settled tool when result has no matching call", () => {
+    const state = reduce(initialState, eventMsg("tool/result", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "m1",
+        role: "user",
+        source: { kind: "tool", callId: "orphan" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "orphan",
+          content: [],
+          isError: true,
+        }],
+      },
+      error: { name: "Error", code: "fail" },
+    }));
+    expect(state.timeline[0]).toMatchObject({
+      kind: "tool",
+      callId: "orphan",
+      name: "tool",
+      status: "error",
+    });
+  });
+
+  it("keeps unparseable raw arguments without throwing", () => {
+    const state = reduce(initialState, eventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "mystery",
+      arguments: "{",
+    }));
+    expect(state.timeline[0]).toMatchObject({
+      kind: "tool",
+      callId: "c1",
+      argsRaw: "{",
+      status: "running",
+    });
+  });
+
+  it("records metadata and presenter diffs on the tool row only", () => {
+    const running = reduce(initialState, eventMsg("tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "c1",
+      name: "edit",
+      arguments: "{}",
+    }));
+    const done = reduce(running, toolEventMsg("tool/result", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "m1",
+        role: "user",
+        source: { kind: "tool", callId: "c1" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "c1",
+          content: [],
+          isError: false,
+        }],
+      },
+      meta: { path: "/x/a.ts", oldText: "a", newText: "b" },
+    }, {
+      for: "result",
+      view: {
+        card: "diff",
+        diffs: [{ path: "/x/new.ts", oldText: null, newText: "new" }],
+      },
+    }));
+    expect(done.timeline[0]).toMatchObject({
+      kind: "tool",
+      status: "ok",
+      diffs: [
+        { path: "/x/a.ts", oldText: "a", newText: "b" },
+        { path: "/x/new.ts", oldText: "", newText: "new" },
+      ],
+    });
+    expect(done.diffs).toEqual([
       { path: "/x/a.ts", oldText: "a", newText: "b" },
     ]);
   });
