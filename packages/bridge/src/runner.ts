@@ -16,6 +16,7 @@ import type {
 } from "@deepseek-ai/dsh-session";
 import type { SessionPersistence } from "@deepseek-ai/dsh-session-persistence";
 import type {} from "@deepseek-ai/dsh-session-query";
+import type {} from "@deepseek-ai/dsh-tools";
 import type {
   CatalogPayload,
   ContextPayload,
@@ -26,6 +27,7 @@ import type {
   PermissionsPayload,
   SessionEventWire,
   SessionListItem,
+  ToolEventView,
 } from "@dsh-vscode/contract";
 import { PROTOCOL_VERSION } from "@dsh-vscode/contract";
 import type { Io } from "./io.js";
@@ -327,6 +329,108 @@ export function toWire(event: SessionEvent): SessionEventWire {
   };
 }
 
+type ToolPresenter = Pick<
+  NonNullable<ReturnType<Context["tools"]["get"]>>,
+  "presentCall" | "presentResult"
+>;
+
+interface ToolPresenterRegistry {
+  get(name: string): ToolPresenter | undefined;
+}
+
+type ToolCallArgs = { name: string; args: unknown };
+type ArgsFor = (callId: string) => ToolCallArgs | undefined;
+
+/**
+ * Compute a tool event's optional render intent. Missing services, definitions,
+ * presenters, call pairings, malformed arguments, and presenter failures all
+ * preserve event delivery by falling back to the generic client rendering.
+ */
+export function viewFor(
+  tools: ToolPresenterRegistry | undefined,
+  event: SessionEvent,
+  argsFor: ArgsFor,
+): ToolEventView | undefined {
+  try {
+    if (event.type === "tool/call") {
+      const view = tools
+        ?.get(event.data.name)
+        ?.presentCall?.(JSON.parse(event.data.arguments));
+      return view === undefined ? undefined : { for: "call", view };
+    }
+    if (event.type === "tool/result") {
+      const call = argsFor(event.data.message.source.callId);
+      if (call === undefined) return undefined;
+      const [result] = event.data.message.content;
+      const view = tools?.get(call.name)?.presentResult?.(call.args, {
+        content: result.content,
+        isError: result.isError === true,
+        ...(event.data.meta === undefined ? {} : { meta: event.data.meta }),
+      });
+      return view === undefined ? undefined : { for: "result", view };
+    }
+  } catch (error: unknown) {
+    console.error(
+      `runner: presenter failed for ${event.type}, falling back to generic: ${String(error)}`,
+    );
+  }
+  return undefined;
+}
+
+/** Serialize one event and attach its tool render intent when available. */
+export function wireEvent(
+  event: SessionEvent,
+  tools: ToolPresenterRegistry | undefined,
+  argsFor: ArgsFor,
+): SessionEventWire {
+  const wire = toWire(event);
+  const view = viewFor(tools, event, argsFor);
+  return view === undefined ? wire : { ...wire, view };
+}
+
+function backscanArgs(
+  events: readonly SessionEvent[],
+  callId: string,
+): ToolCallArgs | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "tool/call" || event.data.callId !== callId) continue;
+    try {
+      return {
+        name: event.data.name,
+        args: JSON.parse(event.data.arguments),
+      };
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function accumulateLiveArgs(
+  calls: Map<string, Map<string, ToolCallArgs>>,
+  session: Session,
+  event: SessionEvent,
+): void {
+  if (event.type === "tool/call") {
+    try {
+      let sessionCalls = calls.get(session.id);
+      if (sessionCalls === undefined) {
+        sessionCalls = new Map();
+        calls.set(session.id, sessionCalls);
+      }
+      sessionCalls.set(event.data.callId, {
+        name: event.data.name,
+        args: JSON.parse(event.data.arguments),
+      });
+    } catch {
+      // Unparseable model arguments cannot produce a presenter view.
+    }
+  } else if (event.type === "turn/end") {
+    calls.delete(session.id);
+  }
+}
+
 /**
  * Run one task through a freshly created Agent in `ctx`, relaying every session
  * event out via `io` and finishing with an `idle` status. Unlike the headless
@@ -356,11 +460,19 @@ export async function runVscode(
 
   // Relay the session firehose before creation so nothing — turn/start through
   // turn/end — is missed.
+  const openCalls = new Map<string, Map<string, ToolCallArgs>>();
   ctx.on("session/event", (session: Session, event: SessionEvent) => {
+    accumulateLiveArgs(openCalls, session, event);
     const out: OutboundMessage = {
       kind: "event",
       sessionId: session.id,
-      event: toWire(event),
+      event: wireEvent(
+        event,
+        ctx.get("tools"),
+        (callId) =>
+          openCalls.get(session.id)?.get(callId) ??
+          backscanArgs(session.events, callId),
+      ),
     };
     io.send(out);
   });
@@ -471,11 +583,19 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
 
   // Relay the session firehose before creation so nothing — turn/start through
   // turn/end — is missed. Registered exactly once for the lifetime of the runner.
+  const openCalls = new Map<string, Map<string, ToolCallArgs>>();
   ctx.on("session/event", (session: Session, event: SessionEvent) => {
+    accumulateLiveArgs(openCalls, session, event);
     const out: OutboundMessage = {
       kind: "event",
       sessionId: session.id,
-      event: toWire(event),
+      event: wireEvent(
+        event,
+        ctx.get("tools"),
+        (callId) =>
+          openCalls.get(session.id)?.get(callId) ??
+          backscanArgs(session.events, callId),
+      ),
     };
     io.send(out);
   });
@@ -587,7 +707,13 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       io.send({
         kind: "history",
         sessionId: session.id,
-        events: session.events.map(toWire),
+        events: session.events.map((event) =>
+          wireEvent(
+            event,
+            ctx.get("tools"),
+            (callId) => backscanArgs(session.events, callId),
+          ),
+        ),
       });
     }
     io.send({
