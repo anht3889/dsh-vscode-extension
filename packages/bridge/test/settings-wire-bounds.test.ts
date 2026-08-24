@@ -509,12 +509,14 @@ describe("bridge projection ceilings stay inside the contract wire scan", () => 
     expect(view.servers[0]?.server.disabledTools)
       .toHaveLength(MAX_MCP_DISABLED_TOOLS);
     // The largest producer payload the contract scan budget is sized for:
-    // 7 view nodes plus 576 nodes for each maximal server row, and 3 more for
-    // the message envelope.
-    expect(countWireNodes(view)).toBe(7 + MAX_MCP_SERVERS * 576);
-    expect(countWireNodes(view)).toBe(36_871);
+    // 9 view nodes plus 576 nodes for each maximal server row, and 3 more for
+    // the message envelope. The view shell grew by two oauth children
+    // (`discovery` and `authorization`); loopback `origin` replaces `reason`
+    // and does not change the count.
+    expect(countWireNodes(view)).toBe(9 + MAX_MCP_SERVERS * 576);
+    expect(countWireNodes(view)).toBe(36_873);
     expect(countWireNodes(view)).toBeLessThanOrEqual(MAX_MCP_LIST_VIEW_NODES);
-    expect(countWireNodes(message)).toBe(36_874);
+    expect(countWireNodes(message)).toBe(36_876);
     expect(countWireNodes(message))
       .toBeLessThanOrEqual(MAX_MCP_LIST_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
     expect(isOutboundMessage(message)).toBe(true);
