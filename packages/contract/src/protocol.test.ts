@@ -237,9 +237,9 @@ describe("protocol v4 slash messages", () => {
   });
 });
 
-describe("protocol v5", () => {
-  it("uses protocol v5", () => {
-    expect(PROTOCOL_VERSION).toBe(5);
+describe("protocol v6", () => {
+  it("uses protocol v6", () => {
+    expect(PROTOCOL_VERSION).toBe(6);
   });
 
   it("accepts settings inbound and outbound messages", () => {
@@ -265,6 +265,77 @@ describe("protocol v5", () => {
       requestId: "s1",
       view: { section: "models", credentialValue: "secret" },
     })).toBe(false);
+  });
+
+  it("accepts all five new inbound settings kinds", () => {
+    expect(isInboundMessage({
+      kind: "getSettingsCapabilities",
+      requestId: "c1",
+    })).toBe(true);
+    expect(isInboundMessage({
+      kind: "getMcpServer",
+      requestId: "d1",
+      serverId: "docs-id",
+    })).toBe(true);
+    expect(isInboundMessage({
+      kind: "getMcpLogs",
+      requestId: "l1",
+      serverId: "docs-id",
+    })).toBe(true);
+    expect(isInboundMessage({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: { kind: "connectServer", serverId: "docs-id" },
+    })).toBe(true);
+    expect(isInboundMessage({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: { engine: null, engines: [] },
+      secrets: [],
+    })).toBe(true);
+  });
+
+  it("accepts all five new outbound settings kinds", () => {
+    expect(isOutboundMessage({
+      kind: "settingsCapabilities",
+      sections: [],
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "mcpServer",
+      requestId: "d1",
+      result: {
+        ok: false,
+        error: { code: "settings-unavailable", message: "MCP is unavailable" },
+      },
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "l1",
+      result: {
+        ok: false,
+        error: { code: "settings-unavailable", message: "MCP is unavailable" },
+      },
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: { ok: true },
+    })).toBe(true);
+    expect(isOutboundMessage({
+      kind: "webSearchMutation",
+      requestId: "w1",
+      result: {
+        ok: false,
+        error: {
+          code: "settings-unavailable",
+          message: "Web Search is unavailable",
+        },
+      },
+    })).toBe(true);
+  });
+
+  it("rejects an incomplete mcpServer message", () => {
+    expect(isOutboundMessage({ kind: "mcpServer" })).toBe(false);
   });
 
   it("accepts only closed correlated submit results", () => {

@@ -1,7 +1,23 @@
 import { describe, it, expect } from "vitest";
 import {
+  isMcpServerInputWire,
   isSettingsInboundCommand,
   isSettingsOutboundMessage,
+  MAX_MCP_ARGS,
+  MAX_MCP_DISABLED_TOOLS,
+  MAX_MCP_ENV_ENTRIES,
+  MAX_MCP_HEADER_NAMES,
+  MAX_MCP_LOG_DETAIL_LENGTH,
+  MAX_MCP_LOG_ENTRIES,
+  MAX_MCP_LOG_MESSAGE_LENGTH,
+  MAX_MCP_SCOPES,
+  MAX_MCP_SECRET_ENTRIES,
+  MAX_MCP_SERVERS,
+  MAX_MCP_TOOLS,
+  MAX_SECRET_VALUE_LENGTH,
+  MAX_WIRE_IDENTIFIER_LENGTH,
+  MAX_WIRE_URL_LENGTH,
+  OPTIONAL_SETTINGS_SECTION_IDS,
   SETTINGS_WIRE_SCAN_NODE_LIMIT,
 } from "./settings.js";
 import { isInboundMessage, isOutboundMessage } from "./protocol.js";
@@ -17,7 +33,508 @@ const generalNamespace = {
   secrets: [],
 };
 
+const mcpReconnect = {
+  enabled: true,
+  initialDelayMs: 500,
+  maxDelayMs: 30_000,
+  maxAttempts: 5,
+};
+
+const mcpServerInput = {
+  serverName: "docs",
+  enabled: true,
+  transport: "stdio" as const,
+  command: "mcp-docs",
+  args: ["--stdio"],
+  env: [{ name: "DOCS_ROOT", value: "/tmp/docs" }],
+  cwd: "/tmp",
+  auth: { kind: "none" as const },
+  toolCallTimeoutMs: 30_000,
+  reconnect: mcpReconnect,
+};
+
+const mcpServer = {
+  id: "docs-id",
+  ...mcpServerInput,
+  createdAt: "2026-08-23T00:00:00.000Z",
+  updatedAt: "2026-08-23T00:00:00.000Z",
+};
+
+const mcpDetail = {
+  server: mcpServer,
+  status: {
+    state: "connected" as const,
+    toolCount: 1,
+    connectedAt: "2026-08-23T00:00:00.000Z",
+  },
+  tools: [{ name: "search", description: "Search docs", enabled: true }],
+  secrets: { kind: "known" as const, secrets: [] },
+};
+
+const webSearchView = {
+  section: "web-search" as const,
+  engine: "tavily" as const,
+  engines: [{
+    engine: "tavily" as const,
+    defaultBaseURL: "https://api.tavily.com",
+    baseURLRequired: false,
+    secretRef: "TAVILY_API_KEY" as const,
+  }],
+  secrets: [{ ref: "TAVILY_API_KEY" as const, configured: true, writable: true }],
+  available: true,
+};
+
+function makeMcpListItem(index: number, status: object = { state: "disconnected" }) {
+  return {
+    server: {
+      id: `server-${index}`,
+      serverName: `Server ${index}`,
+      enabled: true,
+      transport: "stdio",
+      command: "mcp-server",
+      args: ["--stdio"],
+      env: [{ name: "SERVER_INDEX", value: String(index) }],
+      cwd: "/tmp",
+      auth: { kind: "none" },
+      disabledTools: [],
+      toolCallTimeoutMs: 30_000,
+      reconnect: {
+        enabled: true,
+        initialDelayMs: 500,
+        maxDelayMs: 30_000,
+        maxAttempts: 5,
+      },
+      createdAt: "2026-08-23T00:00:00.000Z",
+      updatedAt: "2026-08-23T00:00:00.000Z",
+    },
+    status,
+    toolCount: 0,
+    disabledToolCount: 0,
+  };
+}
+
+describe("Protocol v6 settings constants", () => {
+  it("exports the optional section order and exact safety bounds", () => {
+    expect(OPTIONAL_SETTINGS_SECTION_IDS).toEqual(["mcp", "web-search"]);
+    expect({
+      MAX_MCP_SERVERS,
+      MAX_MCP_TOOLS,
+      MAX_MCP_LOG_ENTRIES,
+      MAX_MCP_ARGS,
+      MAX_MCP_ENV_ENTRIES,
+      MAX_MCP_HEADER_NAMES,
+      MAX_MCP_SCOPES,
+      MAX_MCP_DISABLED_TOOLS,
+      MAX_MCP_SECRET_ENTRIES,
+      MAX_WIRE_IDENTIFIER_LENGTH,
+      MAX_WIRE_URL_LENGTH,
+      MAX_MCP_LOG_MESSAGE_LENGTH,
+      MAX_MCP_LOG_DETAIL_LENGTH,
+      MAX_SECRET_VALUE_LENGTH,
+    }).toEqual({
+      MAX_MCP_SERVERS: 64,
+      MAX_MCP_TOOLS: 256,
+      MAX_MCP_LOG_ENTRIES: 512,
+      MAX_MCP_ARGS: 64,
+      MAX_MCP_ENV_ENTRIES: 64,
+      MAX_MCP_HEADER_NAMES: 32,
+      MAX_MCP_SCOPES: 32,
+      MAX_MCP_DISABLED_TOOLS: 256,
+      MAX_MCP_SECRET_ENTRIES: 32,
+      MAX_WIRE_IDENTIFIER_LENGTH: 1_024,
+      MAX_WIRE_URL_LENGTH: 2_048,
+      MAX_MCP_LOG_MESSAGE_LENGTH: 2_048,
+      MAX_MCP_LOG_DETAIL_LENGTH: 4_096,
+      MAX_SECRET_VALUE_LENGTH: 8_192,
+    });
+  });
+});
+
 describe("isSettingsInboundCommand", () => {
+  it("accepts all Protocol v6 settings commands", () => {
+    expect(isSettingsInboundCommand({
+      kind: "getSettingsCapabilities",
+      requestId: "c1",
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "getMcpServer",
+      requestId: "d1",
+      serverId: "docs-id",
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "getMcpLogs",
+      requestId: "l1",
+      serverId: "docs-id",
+      after: 0,
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: { kind: "upsertServer", server: mcpServerInput },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: {
+        engine: "searxng",
+        engines: [{ engine: "searxng", baseURL: "https://searx.example" }],
+      },
+      secrets: [{ ref: "TAVILY_API_KEY", value: "tvly-x" }],
+    })).toBe(true);
+  });
+
+  it("accepts every MCP operation variant", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "remove",
+      operation: { kind: "removeServer", serverId: "docs-id" },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "enable",
+      operation: {
+        kind: "setServerEnabled",
+        serverId: "docs-id",
+        enabled: false,
+      },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "disconnect",
+      operation: { kind: "disconnectServer", serverId: "docs-id" },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "tool",
+      operation: {
+        kind: "setToolEnabled",
+        serverId: "docs-id",
+        toolName: "search",
+        enabled: true,
+      },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "secret",
+      operation: {
+        kind: "setServerSecrets",
+        serverId: "docs-id",
+        secrets: [{ name: "X-API-Key", value: "write-only" }],
+      },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "oauth",
+      operation: { kind: "clearOAuthTokens", serverId: "docs-id" },
+    })).toBe(true);
+  });
+
+  it("accepts headers, OAuth, and streamable-http server inputs", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "headers",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          auth: { kind: "headers", headerNames: ["X-API-Key"] },
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "oauth",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          auth: {
+            kind: "oauth",
+            clientId: "docs-client",
+            authorizeUrl: "https://auth.example/authorize",
+            tokenUrl: "https://auth.example/token",
+            scopes: ["docs:read"],
+            redirectPath: "/oauth/callback",
+          },
+        },
+      },
+    })).toBe(true);
+    const {
+      command: _command,
+      args: _args,
+      env: _env,
+      cwd: _cwd,
+      ...httpInput
+    } = mcpServerInput;
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "http",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...httpInput,
+          transport: "streamable-http",
+          url: "https://mcp.example/rpc",
+        },
+      },
+    })).toBe(true);
+  });
+
+  it("rejects malformed capability and section commands", () => {
+    expect(isSettingsInboundCommand({
+      kind: "getSettingsCapabilities",
+      requestId: "",
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "getSettingsCapabilities",
+      requestId: "c1",
+      extra: true,
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "getSettingsSection",
+      requestId: "s1",
+      section: "mcp-servers",
+    })).toBe(false);
+  });
+
+  it("rejects malformed MCP log cursors", () => {
+    expect(isSettingsInboundCommand({
+      kind: "getMcpLogs", requestId: "l1", serverId: "docs-id", after: -1,
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "getMcpLogs", requestId: "l1", serverId: "docs-id", after: 1.5,
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "getMcpLogs", requestId: "l1", serverId: "docs-id", after: "0",
+    })).toBe(false);
+  });
+
+  it("rejects mixed MCP auth and transport variants", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, auth: { kind: "none", clientId: "x" } },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, auth: { kind: "headers", scopes: [] } },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, url: "https://mcp.example" },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          transport: "streamable-http",
+          url: "https://mcp.example",
+        },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects invalid MCP numeric fields", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, toolCallTimeoutMs: 0 },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, toolCallTimeoutMs: 1.5 },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          reconnect: { ...mcpReconnect, maxAttempts: -1 },
+        },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects MCP collections and strings over their caps", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, args: Array(MAX_MCP_ARGS + 1).fill("x") },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          env: Array.from(
+            { length: MAX_MCP_ENV_ENTRIES + 1 },
+            (_, index) => ({ name: `KEY_${index}`, value: "x" }),
+          ),
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          auth: {
+            kind: "oauth",
+            clientId: "client",
+            authorizeUrl: "https://auth.example/authorize",
+            tokenUrl: "https://auth.example/token",
+            scopes: Array(MAX_MCP_SCOPES + 1).fill("read"),
+            redirectPath: "/callback",
+          },
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...mcpServerInput,
+          auth: {
+            kind: "headers",
+            headerNames: Array(MAX_MCP_HEADER_NAMES + 1).fill("X-Key"),
+          },
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: { ...mcpServerInput, serverName: "x".repeat(MAX_WIRE_IDENTIFIER_LENGTH + 1) },
+      },
+    })).toBe(false);
+    const { command: _command, args: _args, env: _env, cwd: _cwd, ...httpInput } = mcpServerInput;
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          ...httpInput,
+          transport: "streamable-http",
+          url: "x".repeat(MAX_WIRE_URL_LENGTH + 1),
+        },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects malformed MCP secret operations and unknown operations", () => {
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "setServerSecrets",
+        serverId: "docs-id",
+        secrets: Array.from(
+          { length: MAX_MCP_SECRET_ENTRIES + 1 },
+          (_, index) => ({ name: `SECRET_${index}`, value: "x" }),
+        ),
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "setServerSecrets",
+        serverId: "docs-id",
+        secrets: [{ name: "KEY", value: "x".repeat(MAX_SECRET_VALUE_LENGTH + 1) }],
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: {
+        kind: "setServerSecrets",
+        serverId: "docs-id",
+        secrets: [{ name: "KEY", value: "" }],
+      },
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "o1",
+      operation: { kind: "restartServer", serverId: "docs-id" },
+    })).toBe(false);
+  });
+
+  it("rejects malformed Web Search configuration", () => {
+    expect(isSettingsInboundCommand({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: { engine: "google", engines: [] },
+      secrets: [],
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: {
+        engine: "searxng",
+        engines: [
+          { engine: "searxng", baseURL: "https://one.example" },
+          { engine: "searxng", baseURL: "https://two.example" },
+        ],
+      },
+      secrets: [],
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: {
+        engine: "searxng",
+        engines: [{ engine: "searxng", baseURL: "x".repeat(MAX_WIRE_URL_LENGTH + 1) }],
+      },
+      secrets: [],
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: { engine: "tavily", engines: [] },
+      secrets: [{ ref: "OTHER_KEY", value: "x" }],
+    })).toBe(false);
+    expect(isSettingsInboundCommand({
+      kind: "setWebSearchConfig",
+      requestId: "w1",
+      catalog: { engine: "tavily", engines: [] },
+      secrets: [{ ref: "TAVILY_API_KEY", value: "" }],
+    })).toBe(false);
+  });
   it("accepts getSettingsSection", () => {
     expect(isSettingsInboundCommand({
       kind: "getSettingsSection",
@@ -327,6 +844,419 @@ describe("isSettingsInboundCommand", () => {
 });
 
 describe("isSettingsOutboundMessage", () => {
+  it("accepts all Protocol v6 settings messages", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "settingsCapabilities",
+      sections: ["mcp", "web-search"],
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsCapabilities",
+      requestId: "c1",
+      sections: ["mcp"],
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "d1",
+      result: { ok: true, detail: mcpDetail },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "l1",
+      result: {
+        ok: true,
+        serverId: "docs-id",
+        next: 1,
+        entries: [{
+          at: "2026-08-23T00:00:00.000Z",
+          level: "info",
+          message: "connected",
+        }],
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: { ok: true, detail: mcpDetail },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "webSearchMutation",
+      requestId: "w1",
+      result: {
+        ok: true,
+        view: webSearchView,
+        secretFailures: [{
+          ref: "BRAVE_API_KEY",
+          message: "Could not store BRAVE_API_KEY",
+        }],
+      },
+    })).toBe(true);
+  });
+
+  it("accepts every MCP status and secret-state variant", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "connecting",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          status: { state: "connecting", attempt: 1 },
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "reconnecting",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          status: { state: "reconnecting", attempt: 2, nextDelayMs: 1_000 },
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "failed",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          status: {
+            state: "failed",
+            error: "Connection refused",
+            at: "2026-08-23T00:01:00.000Z",
+          },
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "unknown-secrets",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          secrets: { kind: "unknown" },
+        },
+      },
+    })).toBe(true);
+  });
+
+  it("accepts headers, OAuth, and streamable-http server details", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "headers",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          server: {
+            ...mcpServer,
+            auth: { kind: "headers", headerNames: ["X-API-Key"] },
+          },
+        },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "oauth",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          server: {
+            ...mcpServer,
+            auth: {
+              kind: "oauth",
+              clientId: "docs-client",
+              authorizeUrl: "https://auth.example/authorize",
+              tokenUrl: "https://auth.example/token",
+              scopes: ["docs:read"],
+              redirectPath: "/oauth/callback",
+            },
+          },
+        },
+      },
+    })).toBe(true);
+    const {
+      command: _command,
+      args: _args,
+      env: _env,
+      cwd: _cwd,
+      ...httpServer
+    } = mcpServer;
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "http",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          server: {
+            ...httpServer,
+            transport: "streamable-http",
+            url: "https://mcp.example/rpc",
+          },
+        },
+      },
+    })).toBe(true);
+  });
+
+  it("accepts both new optional settings section views", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp",
+      view: {
+        section: "mcp",
+        servers: [{
+          server: mcpServer,
+          status: { state: "disconnected" },
+          toolCount: 0,
+          disabledToolCount: 0,
+        }],
+        secretStates: "available",
+        oauth: { kind: "manual", reason: "no-callback-origin" },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "web-search",
+      view: webSearchView,
+    })).toBe(true);
+  });
+
+  it("rejects malformed capability announcements", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "settingsCapabilities",
+      sections: ["mcp", "mcp"],
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsCapabilities",
+      sections: ["general"],
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsCapabilities",
+      requestId: "",
+      sections: ["mcp"],
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsCapabilities",
+      sections: ["mcp"],
+      extra: true,
+    })).toBe(false);
+  });
+
+  it("rejects malformed MCP server detail records", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "d1",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          status: { state: "connected", attempt: 1 },
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "d1",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          server: {
+            ...mcpServer,
+            disabledTools: Array(MAX_MCP_DISABLED_TOOLS + 1).fill("search"),
+          },
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "d1",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          tools: Array.from(
+            { length: MAX_MCP_TOOLS + 1 },
+            (_, index) => ({ name: `tool-${index}`, description: "", enabled: true }),
+          ),
+        },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "d1",
+      result: {
+        ok: true,
+        detail: { ...mcpDetail, secrets: { kind: "known" } },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects an MCP server list over its cap using fresh records", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "mcp-over-cap",
+      view: {
+        section: "mcp",
+        servers: Array.from(
+          { length: MAX_MCP_SERVERS + 1 },
+          (_, index) => makeMcpListItem(index),
+        ),
+        secretStates: "available",
+        oauth: { kind: "manual", reason: "no-callback-origin" },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects malformed MCP log records", () => {
+    const entry = {
+      at: "2026-08-23T00:00:00.000Z",
+      level: "info",
+      message: "connected",
+    };
+    expect(isSettingsOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "l1",
+      result: {
+        ok: true,
+        serverId: "docs-id",
+        next: 1,
+        entries: Array.from(
+          { length: MAX_MCP_LOG_ENTRIES + 1 },
+          () => ({ ...entry }),
+        ),
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "l1",
+      result: {
+        ok: true,
+        serverId: "docs-id",
+        next: 1,
+        entries: [{ ...entry, message: "x".repeat(MAX_MCP_LOG_MESSAGE_LENGTH + 1) }],
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "l1",
+      result: {
+        ok: true,
+        serverId: "docs-id",
+        next: 1,
+        entries: [{ ...entry, detail: "x".repeat(MAX_MCP_LOG_DETAIL_LENGTH + 1) }],
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "l1",
+      result: {
+        ok: true,
+        serverId: "docs-id",
+        next: 1,
+        entries: [{ ...entry, level: "debug" }],
+      },
+    })).toBe(false);
+  });
+
+  it("rejects dual-arm and empty MCP operation results", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: {
+        ok: true,
+        error: { code: "internal", message: "x" },
+      },
+    })).toBe(false);
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: {},
+    })).toBe(false);
+  });
+
+  it("rejects undeclared credential-bearing fields in a Web Search view", () => {
+    const secretFields = [
+      { ref: "TAVILY_API_KEY", value: "tvly-x" },
+      { apiKey: "tvly-x" },
+      { secret: "tvly-x" },
+      { token: "tvly-x" },
+      { password: "tvly-x" },
+    ];
+    for (const leaked of secretFields) {
+      expect(isSettingsOutboundMessage({
+        kind: "webSearchMutation",
+        requestId: "w1",
+        result: {
+          ok: true,
+          view: { ...webSearchView, leaked },
+          secretFailures: [],
+        },
+      })).toBe(false);
+    }
+  });
+
+  it("accepts MCP env name/value pairs through the outbound credential scan", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpServer",
+      requestId: "env",
+      result: {
+        ok: true,
+        detail: {
+          ...mcpDetail,
+          server: {
+            ...mcpServer,
+            env: [{ name: "DOCS_ROOT", value: "/tmp/docs" }],
+          },
+        },
+      },
+    })).toBe(true);
+  });
+
+  it("rejects repeated record references after closed-schema validation", () => {
+    const sharedStatus = { state: "disconnected" };
+    expect(isSettingsOutboundMessage({
+      kind: "settingsSection",
+      requestId: "shared-status",
+      view: {
+        section: "mcp",
+        servers: [
+          makeMcpListItem(1, sharedStatus),
+          makeMcpListItem(2, sharedStatus),
+        ],
+        secretStates: "available",
+        oauth: { kind: "manual", reason: "no-callback-origin" },
+      },
+    })).toBe(false);
+  });
+
+  it("rejects forbidden and undeclared recursive fields in closed schemas", () => {
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      const message = {
+        kind: "settingsCapabilities",
+        sections: ["mcp"],
+      } as Record<string, unknown>;
+      Object.defineProperty(message, key, {
+        value: "x",
+        enumerable: true,
+      });
+      expect(isSettingsOutboundMessage(message)).toBe(false);
+    }
+
+    const view: Record<string, unknown> = { ...webSearchView };
+    view.self = view;
+    expect(isSettingsOutboundMessage({
+      kind: "webSearchMutation",
+      requestId: "w1",
+      result: { ok: true, view, secretFailures: [] },
+    })).toBe(false);
+  });
+
   it("accepts settingsSection views for each section tag", () => {
     expect(isSettingsOutboundMessage({
       kind: "settingsSection",
@@ -460,6 +1390,38 @@ describe("isSettingsOutboundMessage", () => {
       kind: "settingsInvalidated",
       sections: ["general", "models"],
       reason: "document",
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsInvalidated",
+      sections: ["mcp", "web-search"],
+      reason: "mcp",
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "settingsInvalidated",
+      sections: ["web-search"],
+      reason: "web-search",
+    })).toBe(true);
+  });
+
+  it("accepts the Protocol v6 settings error codes", () => {
+    expect(isSettingsOutboundMessage({
+      kind: "mcpOperation",
+      requestId: "o1",
+      result: {
+        ok: false,
+        error: { code: "mcp-rejected", message: "Server was rejected" },
+      },
+    })).toBe(true);
+    expect(isSettingsOutboundMessage({
+      kind: "webSearchMutation",
+      requestId: "w1",
+      result: {
+        ok: false,
+        error: {
+          code: "web-search-rejected",
+          message: "Catalog was rejected",
+        },
+      },
     })).toBe(true);
   });
 
@@ -1061,7 +2023,59 @@ describe("isSettingsOutboundMessage", () => {
   });
 });
 
-describe("protocol v5 settings integration", () => {
+describe("isMcpServerInputWire", () => {
+  it("is the exported acceptance predicate the editor can reuse before sending", () => {
+    expect(isMcpServerInputWire(mcpServerInput)).toBe(true);
+    expect(isSettingsInboundCommand({
+      kind: "runMcpOperation",
+      requestId: "op-1",
+      operation: { kind: "upsertServer", server: mcpServerInput },
+    })).toBe(true);
+  });
+
+  it("rejects the same records the operation validator rejects", () => {
+    const rejected: object[] = [
+      { ...mcpServerInput, serverName: "" },
+      { ...mcpServerInput, command: "" },
+      { ...mcpServerInput, toolCallTimeoutMs: 0 },
+      {
+        ...mcpServerInput,
+        auth: { kind: "headers", headerNames: [""] },
+      },
+      { ...mcpServerInput, env: [{ name: "", value: "" }] },
+      {
+        serverName: "http",
+        enabled: true,
+        transport: "streamable-http",
+        url: "",
+        auth: { kind: "none" },
+        toolCallTimeoutMs: 30_000,
+        reconnect: mcpReconnect,
+      },
+      {
+        ...mcpServerInput,
+        auth: {
+          kind: "oauth",
+          clientId: "",
+          authorizeUrl: "",
+          tokenUrl: "",
+          scopes: [],
+          redirectPath: "",
+        },
+      },
+    ];
+    for (const server of rejected) {
+      expect(isMcpServerInputWire(server)).toBe(false);
+      expect(isSettingsInboundCommand({
+        kind: "runMcpOperation",
+        requestId: "op-1",
+        operation: { kind: "upsertServer", server },
+      })).toBe(false);
+    }
+  });
+});
+
+describe("protocol v6 settings integration", () => {
   it("routes settings kinds through protocol validators", () => {
     expect(isInboundMessage({
       kind: "getSettingsSection",

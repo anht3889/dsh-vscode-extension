@@ -1,4 +1,5 @@
 import React from "react";
+import type { OptionalSettingsSectionId } from "@dsh-vscode/contract";
 import { settingsText, type SettingsCopyKey } from "./localization/index.js";
 import type {
   SettingsLocale,
@@ -8,22 +9,27 @@ import type {
 const SECTIONS: readonly {
   id: SettingsUiSectionId;
   label: SettingsCopyKey;
+  optional?: OptionalSettingsSectionId;
 }[] = [
   { id: "general", label: "general" },
   { id: "models", label: "models" },
   { id: "plugins", label: "plugins" },
+  { id: "mcp", label: "mcp", optional: "mcp" },
+  { id: "web-search", label: "webSearch", optional: "web-search" },
   { id: "agent-presets", label: "agentPresets" },
   { id: "extension", label: "extension" },
 ];
 
 interface SettingsNavProps {
   active: SettingsUiSectionId;
+  capabilities: readonly OptionalSettingsSectionId[];
   locale: SettingsLocale;
   onSelect(section: SettingsUiSectionId): void;
 }
 
 export function SettingsNav({
   active,
+  capabilities,
   locale,
   onSelect,
 }: SettingsNavProps): JSX.Element {
@@ -33,7 +39,11 @@ export function SettingsNav({
       aria-label={settingsText(locale, "settingsSections")}
     >
       <div className="dsh-settings-nav-list">
-        {SECTIONS.map((section) => (
+        {SECTIONS.filter(
+          (section) =>
+            section.optional === undefined ||
+            capabilities.includes(section.optional),
+        ).map((section) => (
           <button
             className="dsh-settings-nav-item"
             type="button"
@@ -42,7 +52,19 @@ export function SettingsNav({
             onClick={() => onSelect(section.id)}
           >
             <span className="dsh-settings-nav-icon" aria-hidden="true">
-              {section.id === "general" ? "⚙" : section.id === "models" ? "◫" : section.id === "plugins" ? "◇" : section.id === "agent-presets" ? "◎" : "▣"}
+              {section.id === "general"
+                ? "⚙"
+                : section.id === "models"
+                ? "◫"
+                : section.id === "plugins"
+                ? "◇"
+                : section.id === "mcp"
+                ? "⇄"
+                : section.id === "web-search"
+                ? "⌕"
+                : section.id === "agent-presets"
+                ? "◎"
+                : "▣"}
             </span>
             <span>{settingsText(locale, section.label)}</span>
           </button>

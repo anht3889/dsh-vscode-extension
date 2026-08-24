@@ -86,11 +86,26 @@ export function dispatchCommand(
     case "executeSlashCommand":
       hooks.runner.executeSlashCommand(msg.line, msg.images);
       return;
+    case "getSettingsCapabilities":
+      hooks.runner.getCapabilities(msg.requestId);
+      return;
     case "getSettingsSection":
       hooks.runner.getSection(msg.requestId, msg.section);
       return;
+    case "getMcpServer":
+      hooks.runner.getMcpServer(msg);
+      return;
+    case "getMcpLogs":
+      hooks.runner.getMcpLogs(msg);
+      return;
+    case "runMcpOperation":
+      hooks.runner.runMcpOperation(msg);
+      return;
     case "mutateSettings":
       hooks.runner.mutate(msg);
+      return;
+    case "setWebSearchConfig":
+      hooks.runner.setWebSearchConfig(msg);
       return;
     case "setCredential":
       hooks.runner.setCredential(msg);
@@ -113,8 +128,9 @@ export function dispatchCommand(
     case "exit":
       return;
     default: {
-      const _exhaustive: never = msg;
-      void _exhaustive;
+      const exhaustive: never = msg;
+      void exhaustive;
+      return;
     }
   }
 }

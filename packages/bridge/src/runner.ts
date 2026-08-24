@@ -598,6 +598,10 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
       permissions,
       ...(context !== undefined ? { context } : {}),
     });
+    io.send({
+      kind: "settingsCapabilities",
+      sections: settingsCoordinator.capabilities(),
+    });
   };
 
   await emitLiveSession(live, false);
@@ -1140,8 +1144,14 @@ export async function createRunner(ctx: Context, io: Io): Promise<SessionControl
     listSlashItems: (requestId) => slashCatalog.list(requestId),
     executeSlashCommand: (line, images) =>
       slashCommandExecutor.execute(line, images),
+    getCapabilities: settingsCoordinator.getCapabilities,
+    capabilities: settingsCoordinator.capabilities,
     getSection: settingsCoordinator.getSection,
+    getMcpServer: settingsCoordinator.getMcpServer,
+    getMcpLogs: settingsCoordinator.getMcpLogs,
+    runMcpOperation: settingsCoordinator.runMcpOperation,
     mutate: settingsCoordinator.mutate,
+    setWebSearchConfig: settingsCoordinator.setWebSearchConfig,
     setCredential: settingsCoordinator.setCredential,
     unsetCredential: settingsCoordinator.unsetCredential,
     copyPreset: settingsCoordinator.copyPreset,

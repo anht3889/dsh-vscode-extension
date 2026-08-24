@@ -1,4 +1,7 @@
 import type {
+  McpSettingsView,
+  OptionalSettingsSectionId,
+  SettingsCapabilitiesMessage,
   SettingsInvalidatedMessage,
   SettingsMutationMessage,
   SettingsSectionId,
@@ -28,6 +31,8 @@ export interface SettingsState {
   activeSection: SettingsUiSectionId;
   locale: SettingsLocale;
   sections: Record<SettingsSectionId, SettingsSectionState>;
+  capabilities: OptionalSettingsSectionId[];
+  capabilitiesKnown: boolean;
   connected: boolean;
   connectionEpoch: number;
   invalidationSeq: number;
@@ -52,6 +57,11 @@ export type SettingsAction =
       requestId: string;
     }
   | { kind: "settingsSectionReceived"; message: SettingsSectionMessage }
+  | { kind: "mcpViewSynchronized"; view: McpSettingsView }
+  | {
+      kind: "settingsCapabilitiesReceived";
+      message: SettingsCapabilitiesMessage;
+    }
   | { kind: "settingsMutationReceived"; message: SettingsMutationMessage }
   | { kind: "settingsInvalidated"; message: SettingsInvalidatedMessage }
   | { kind: "settingsDisconnected"; detail: string }

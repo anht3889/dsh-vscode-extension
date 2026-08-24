@@ -169,6 +169,7 @@ export function SettingsModal({
         </header>
         <SettingsNav
           active={state.activeSection}
+          capabilities={state.capabilities}
           locale={state.locale}
           onSelect={onSection}
         />

@@ -1137,7 +1137,10 @@ body,
 }
 
 .dsh-settings-plugins,
-.dsh-plugin-cards {
+.dsh-plugin-cards,
+.dsh-settings-web-search,
+.dsh-web-search-secrets,
+.dsh-web-search-other-fields {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -1208,6 +1211,338 @@ body,
 .dsh-plugin-field label > span {
   display: block;
   margin-bottom: 4px;
+}
+
+.dsh-web-search-engines {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 10px;
+}
+
+.dsh-web-search-engines legend {
+  padding: 0 5px;
+  font-weight: 600;
+}
+
+.dsh-web-search-radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.dsh-web-search-radio-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dsh-web-search-field {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+}
+
+.dsh-web-search-field label > span,
+.dsh-web-search-field input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.dsh-web-search-field label > span {
+  margin-bottom: 5px;
+  font-weight: 600;
+}
+
+.dsh-web-search-field input {
+  padding: 6px 8px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 6px;
+  color: var(--dsh-fg);
+  background: var(--dsh-input);
+  font: inherit;
+}
+
+.dsh-settings-hint,
+.dsh-settings-error,
+.dsh-web-search-availability {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.dsh-settings-hint {
+  color: var(--dsh-muted);
+}
+
+.dsh-settings-error {
+  color: var(--dsh-danger);
+}
+
+.dsh-settings-error p {
+  margin: 0 0 4px;
+}
+
+.dsh-web-search-other {
+  padding: 10px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+}
+
+.dsh-web-search-other summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.dsh-web-search-other-fields {
+  margin-top: 10px;
+}
+
+.dsh-web-search-availability {
+  padding: 8px 10px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+  background: var(--dsh-input);
+}
+
+.dsh-settings-mcp,
+.dsh-mcp-server-list,
+.dsh-mcp-detail,
+.dsh-mcp-editor,
+.dsh-mcp-secondary,
+.dsh-mcp-oauth-fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dsh-mcp-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.dsh-mcp-list-heading,
+.dsh-mcp-row-actions,
+.dsh-mcp-secret-request {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dsh-mcp-list-heading {
+  justify-content: space-between;
+}
+
+.dsh-mcp-list-heading h3,
+.dsh-mcp-detail h3,
+.dsh-mcp-detail h4,
+.dsh-mcp-editor h3,
+.dsh-mcp-empty p {
+  margin: 0;
+}
+
+.dsh-mcp-server-row,
+.dsh-mcp-detail,
+.dsh-mcp-editor,
+.dsh-mcp-empty {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 10px;
+}
+
+.dsh-mcp-server-row[aria-current="true"] {
+  border-color: var(--vscode-focusBorder, var(--dsh-accent));
+}
+
+.dsh-mcp-server-select {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.dsh-mcp-server-select span,
+.dsh-mcp-status,
+.dsh-mcp-tools small {
+  color: var(--dsh-muted);
+}
+
+.dsh-mcp-status,
+.dsh-mcp-server-row > .dsh-settings-badge {
+  display: block;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+}
+
+.dsh-mcp-row-actions {
+  margin-top: 9px;
+}
+
+.dsh-mcp-tools,
+.dsh-mcp-secrets {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsh-mcp-tools label {
+  display: flex;
+  align-items: start;
+  gap: 7px;
+}
+
+.dsh-mcp-tools label span,
+.dsh-mcp-tools small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dsh-mcp-secrets li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dsh-mcp-secrets code {
+  overflow-wrap: anywhere;
+}
+
+.dsh-mcp-oauth-note {
+  padding: 9px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+  background: var(--dsh-input);
+  overflow-wrap: anywhere;
+}
+
+.dsh-mcp-oauth-note p {
+  margin: 0 0 8px;
+}
+
+.dsh-mcp-field > span {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.dsh-mcp-field-group {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dsh-mcp-invalid {
+  margin: 4px 0 0;
+  color: var(--dsh-danger);
+  overflow-wrap: anywhere;
+}
+
+.dsh-mcp-repeat > div > .dsh-mcp-invalid {
+  grid-column: 1 / -1;
+}
+
+.dsh-mcp-field input,
+.dsh-mcp-field select,
+.dsh-mcp-repeat input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.dsh-mcp-editor fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+}
+
+.dsh-mcp-editor legend {
+  padding: 0 5px;
+  font-weight: 600;
+}
+
+.dsh-mcp-editor fieldset > label,
+.dsh-mcp-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+}
+
+.dsh-mcp-repeat > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.dsh-mcp-reconnect {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dsh-mcp-reconnect > .dsh-mcp-check {
+  grid-column: 1 / -1;
+}
+
+.dsh-mcp-log {
+  box-sizing: border-box;
+  max-height: min(36vh, 320px);
+  overflow: auto;
+  border: 1px solid var(--dsh-border);
+  border-radius: 8px;
+}
+
+.dsh-mcp-log-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 6px 9px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--dsh-border);
+  overflow-wrap: anywhere;
+}
+
+.dsh-mcp-log-row:last-child {
+  border-bottom: 0;
+}
+
+.dsh-mcp-log-row pre {
+  grid-column: 1 / -1;
+  max-width: 100%;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.dsh-mcp-log-level-warn,
+.dsh-mcp-log-level-error {
+  font-weight: 600;
+}
+
+.dsh-mcp-log-level-error {
+  color: var(--dsh-danger);
 }
 
 .dsh-plugin-field p,
@@ -1354,6 +1689,12 @@ body,
   outline-offset: -1px;
 }
 
+@media (max-width: 775px) {
+  .dsh-mcp-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 560px) {
   .dsh-settings-overlay {
     padding: 12px;
@@ -1416,8 +1757,17 @@ body,
   .dsh-models-model-row,
   .dsh-models-custom-model-row,
   .dsh-plugin-field,
-  .dsh-plugin-inventory li {
+  .dsh-plugin-inventory li,
+  .dsh-web-search-field,
+  .dsh-mcp-layout,
+  .dsh-mcp-repeat > div,
+  .dsh-mcp-reconnect,
+  .dsh-mcp-log-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dsh-mcp-log-row pre {
+    grid-column: 1;
   }
 
   .dsh-preset-actions,

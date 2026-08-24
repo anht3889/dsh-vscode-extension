@@ -9,11 +9,16 @@ import type {
   AgentPresetContentMessage,
   AskAnswerWire,
   FileReferenceItem,
+  McpLogsMessage,
+  McpOperationMessage,
+  McpServerMessage,
+  SettingsCapabilitiesMessage,
   SettingsInvalidatedMessage,
   SettingsMutationMessage,
   SettingsSectionMessage,
   SettingsSectionId,
   SlashMenuItem,
+  WebSearchMutationMessage,
 } from "@dsh-vscode/contract";
 import {
   reduce,
@@ -52,6 +57,10 @@ import { PluginsSection } from "./settings/sections/plugins/PluginsSection.js";
 import { PluginsController } from "./settings/sections/plugins/PluginsController.js";
 import { AgentPresetsSection } from "./settings/sections/agent-presets/AgentPresetsSection.js";
 import { AgentPresetsController } from "./settings/sections/agent-presets/AgentPresetsController.js";
+import { McpSection } from "./settings/sections/mcp/McpSection.js";
+import { McpController } from "./settings/sections/mcp/McpController.js";
+import { WebSearchSection } from "./settings/sections/web-search/WebSearchSection.js";
+import { WebSearchController } from "./settings/sections/web-search/WebSearchController.js";
 import {
   acquireVsCodeApi,
   type SettingsHostResultMessage,
@@ -59,6 +68,12 @@ import {
 } from "./vscode.js";
 
 const vscode = acquireVsCodeApi();
+
+/**
+ * MCP list, detail, and log refresh cadence, matching DSH Web's MCP section.
+ * A webview refresh interval, not a deployment-varying plugin tunable.
+ */
+const MCP_POLL_INTERVAL_MS = 2_000;
 
 function initialSettingsFromHost(): typeof initialSettingsState {
   const locale = readRetainedLocale(vscode.getState());
@@ -149,6 +164,11 @@ export function App(): JSX.Element {
     (value: number) => value + 1,
     0,
   );
+  const [, renderMcpController] = useReducer((value: number) => value + 1, 0);
+  const [, renderWebSearchController] = useReducer(
+    (value: number) => value + 1,
+    0,
+  );
   const [recentOpen, setRecentOpen] = useState(false);
   const [focusPickerSearch, setFocusPickerSearch] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
@@ -161,6 +181,8 @@ export function App(): JSX.Element {
   const modelsControllerRef = useRef<ModelsController>();
   const pluginsControllerRef = useRef<PluginsController>();
   const agentPresetsControllerRef = useRef<AgentPresetsController>();
+  const mcpControllerRef = useRef<McpController>();
+  const webSearchControllerRef = useRef<WebSearchController>();
   settingsStateRef.current = settingsState;
   useEffect(() => {
     vscode.setState(retainedLocaleState(settingsState.locale));
@@ -175,6 +197,22 @@ export function App(): JSX.Element {
         resolve(false);
       }
       settingsConfirmationResolvers.current.clear();
+    };
+    // Routes an MCP reply and, when it changed the controller's authoritative
+    // list, republishes that list as the cached section view. A rejected or
+    // stale reply leaves the revision alone, so the cache is untouched.
+    const receiveMcpReply = (
+      receive: (controller: McpController) => void,
+    ): void => {
+      const controller = mcpControllerRef.current;
+      if (controller === undefined) return;
+      const revision = controller.listRevision();
+      receive(controller);
+      if (controller.listRevision() === revision) return;
+      const view = controller.listView();
+      if (view !== undefined) {
+        settingsDispatch({ kind: "mcpViewSynchronized", view });
+      }
     };
     const onMessage = (event: MessageEvent<unknown>): void => {
       const data = event.data;
@@ -234,10 +272,58 @@ export function App(): JSX.Element {
           ) {
             agentPresetsControllerRef.current?.updateView(message.view);
           }
+          const webSearchState =
+            settingsStateRef.current.sections["web-search"];
+          if (
+            message.view !== undefined &&
+            message.view.section === "web-search" &&
+            webSearchState.status === "loading" &&
+            webSearchState.requestId === message.requestId
+          ) {
+            webSearchControllerRef.current?.updateView(message.view);
+          }
+          const mcpState = settingsStateRef.current.sections.mcp;
+          if (
+            mcpState.status === "loading" &&
+            mcpState.requestId === message.requestId
+          ) {
+            if (message.view === undefined) {
+              // Clears the controller's single-flight list slot so the next
+              // poll tick refreshes instead of stalling behind a lost read.
+              mcpControllerRef.current?.receiveListFailure();
+            } else if (message.view.section === "mcp") {
+              mcpControllerRef.current?.updateView(message.view);
+            }
+          }
           settingsDispatch({
             kind: "settingsSectionReceived",
             message,
           });
+        } else if (data.kind === "settingsCapabilities") {
+          const message = data as SettingsCapabilitiesMessage;
+          const advertised: readonly string[] = message.sections;
+          const previous = settingsStateRef.current.capabilities;
+          if (previous.includes("mcp") && !advertised.includes("mcp")) {
+            mcpControllerRef.current?.unavailable();
+          }
+          if (
+            previous.includes("web-search") &&
+            !advertised.includes("web-search")
+          ) {
+            webSearchControllerRef.current?.discardAll();
+          }
+          settingsDispatch({
+            kind: "settingsCapabilitiesReceived",
+            message,
+          });
+        } else if (data.kind === "mcpServer") {
+          receiveMcpReply((controller) =>
+            controller.receiveDetail(data as McpServerMessage));
+        } else if (data.kind === "mcpLogs") {
+          mcpControllerRef.current?.receiveLogs(data as McpLogsMessage);
+        } else if (data.kind === "mcpOperation") {
+          receiveMcpReply((controller) =>
+            controller.receiveOperation(data as McpOperationMessage));
         } else if (data.kind === "agentPresetContent") {
           agentPresetsControllerRef.current?.receiveContent(
             data as AgentPresetContentMessage,
@@ -283,6 +369,10 @@ export function App(): JSX.Element {
             kind: "settingsMutationReceived",
             message: mutation,
           });
+        } else if (data.kind === "webSearchMutation") {
+          webSearchControllerRef.current?.receive(
+            data as WebSearchMutationMessage,
+          );
         } else if (data.kind === "hostDisconnected") {
           settleSettingsConfirmations();
           extensionControllerRef.current?.invalidate();
@@ -290,6 +380,8 @@ export function App(): JSX.Element {
           modelsControllerRef.current?.disconnect();
           pluginsControllerRef.current?.disconnect();
           agentPresetsControllerRef.current?.disconnect();
+          mcpControllerRef.current?.disconnect();
+          webSearchControllerRef.current?.disconnect();
           const detail =
             "detail" in data && typeof data.detail === "string"
               ? data.detail
@@ -297,6 +389,12 @@ export function App(): JSX.Element {
           settingsDispatch({ kind: "settingsDisconnected", detail });
         } else if (data.kind === "ready") {
           settingsDispatch({ kind: "settingsConnected" });
+          const requestId = crypto.randomUUID();
+          const command: UiCommand = {
+            type: "dsh/ui",
+            cmd: { kind: "getSettingsCapabilities", requestId },
+          };
+          vscode.postMessage(command);
         }
         dispatch(data as UiMessage);
       }
@@ -315,6 +413,8 @@ export function App(): JSX.Element {
       modelsControllerRef.current?.disconnect();
       pluginsControllerRef.current?.disconnect();
       agentPresetsControllerRef.current?.disconnect();
+      mcpControllerRef.current?.disconnect();
+      webSearchControllerRef.current?.disconnect();
     };
   }, []);
 
@@ -395,6 +495,28 @@ export function App(): JSX.Element {
       agentPresetsController.subscribe(() => renderAgentPresetsController()),
     [agentPresetsController],
   );
+  if (mcpControllerRef.current === undefined) {
+    mcpControllerRef.current = new McpController(
+      (command) => post(command),
+      () => requestSettingsSection("mcp", true),
+    );
+  }
+  const mcpController = mcpControllerRef.current;
+  useEffect(
+    () => mcpController.subscribe(() => renderMcpController()),
+    [mcpController],
+  );
+  if (webSearchControllerRef.current === undefined) {
+    webSearchControllerRef.current = new WebSearchController(
+      (command) => post(command),
+      () => requestSettingsSection("web-search", true),
+    );
+  }
+  const webSearchController = webSearchControllerRef.current;
+  useEffect(
+    () => webSearchController.subscribe(() => renderWebSearchController()),
+    [webSearchController],
+  );
   if (extensionControllerRef.current === undefined) {
     extensionControllerRef.current = new ExtensionController(
       (command) => post(command),
@@ -460,6 +582,23 @@ export function App(): JSX.Element {
     }
   }, [requestSettingsSection, settingsState.invalidationSeq]);
 
+  const mcpPolling =
+    settingsState.open &&
+    settingsState.activeSection === "mcp" &&
+    settingsState.connected &&
+    settingsState.capabilities.includes("mcp");
+
+  useEffect(() => {
+    if (!mcpPolling) return;
+    // The lazy section read already fetched the list, so the first tick lands
+    // one interval later.
+    const interval = setInterval(
+      () => mcpController.poll(),
+      MCP_POLL_INTERVAL_MS,
+    );
+    return () => clearInterval(interval);
+  }, [mcpController, mcpPolling]);
+
   const openSettings = useCallback((): void => {
     if (settingsStateRef.current.open) return;
     setRecentOpen(false);
@@ -515,15 +654,19 @@ export function App(): JSX.Element {
       extensionController.snapshot().dirty ||
         modelsController.snapshot().dirty ||
         pluginsController.snapshot().dirty ||
-        agentPresetsController.snapshot().dirty,
+        agentPresetsController.snapshot().dirty ||
+        mcpController.snapshot().dirty ||
+        webSearchController.snapshot().dirty,
     );
   }, [
     agentPresetsController,
     closeSettings,
     extensionController,
+    mcpController,
     modelsController,
     openSettings,
     pluginsController,
+    webSearchController,
   ]);
 
   const cancelSettingsClose = useCallback((): void => {
@@ -538,12 +681,16 @@ export function App(): JSX.Element {
     modelsController.discardAll();
     pluginsController.discardAll();
     agentPresetsController.discardAll();
+    mcpController.discardAll();
+    webSearchController.discardAll();
     settingsDispatch({ kind: "closeSettings" });
   }, [
     agentPresetsController,
     extensionController,
+    mcpController,
     modelsController,
     pluginsController,
+    webSearchController,
   ]);
 
   useEffect(() => {
@@ -878,7 +1025,9 @@ export function App(): JSX.Element {
               extensionController.snapshot().dirty ||
               modelsController.snapshot().dirty ||
               pluginsController.snapshot().dirty ||
-              agentPresetsController.snapshot().dirty,
+              agentPresetsController.snapshot().dirty ||
+              mcpController.snapshot().dirty ||
+              webSearchController.snapshot().dirty,
             confirmation: sectionConfirmation,
           }}
           returnFocusRef={settingsButtonRef}
@@ -935,6 +1084,23 @@ export function App(): JSX.Element {
               view={settingsState.sections["agent-presets"].view}
               locale={settingsState.locale}
               onConfirmationChange={setSectionConfirmation}
+            />
+          ) : null}
+          {settingsState.activeSection === "mcp" ? (
+            <McpSection
+              controller={mcpController}
+              locale={settingsState.locale}
+              state={settingsState.sections.mcp}
+              onConfirmationChange={setSectionConfirmation}
+            />
+          ) : null}
+          {settingsState.activeSection === "web-search" &&
+          settingsState.sections["web-search"].view?.section ===
+            "web-search" ? (
+            <WebSearchSection
+              controller={webSearchController}
+              view={settingsState.sections["web-search"].view}
+              locale={settingsState.locale}
             />
           ) : null}
         </SettingsModal>

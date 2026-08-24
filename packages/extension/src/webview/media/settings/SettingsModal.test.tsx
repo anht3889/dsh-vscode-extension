@@ -46,6 +46,50 @@ describe("SettingsModal", () => {
     expect(onSection).toHaveBeenCalledWith("models");
   });
 
+  it("renders optional navigation only for announced capabilities", () => {
+    const props = {
+      onSection: vi.fn(),
+      onRequestClose: vi.fn(),
+    };
+    const { rerender } = render(
+      <SettingsModal
+        {...props}
+        state={{ ...initialSettingsState, open: true }}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "MCP" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Web Search" }),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <SettingsModal
+        {...props}
+        state={{
+          ...initialSettingsState,
+          open: true,
+          capabilities: ["mcp", "web-search"],
+          capabilitiesKnown: true,
+        }}
+      />,
+    );
+    const navigation = screen.getByRole("navigation", {
+      name: "Settings sections",
+    });
+    expect(
+      within(navigation).getAllByRole("button").map((button) => button.textContent),
+    ).toEqual([
+      "⚙General",
+      "◫Models",
+      "◇Plugins",
+      "⇄MCP",
+      "⌕Web Search",
+      "◎Agent Presets",
+      "▣Extension",
+    ]);
+  });
+
   it("requests close for Escape and the mask but not panel pointer events", () => {
     const onRequestClose = vi.fn();
     render(

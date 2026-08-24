@@ -10,7 +10,7 @@ import {
   SETTINGS_OUTBOUND_KINDS,
 } from "./settings.js";
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export type ImageMediaType =
   | "image/png" | "image/jpeg" | "image/webp" | "image/gif";
