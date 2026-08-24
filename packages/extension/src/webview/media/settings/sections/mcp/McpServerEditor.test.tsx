@@ -7,6 +7,7 @@ import {
   isInboundMessage,
   type McpOperationMessage,
   type McpServerDetailWire,
+  type McpServerListItemWire,
 } from "@dsh-vscode/contract";
 import { McpController } from "./McpController.js";
 import { McpServerEditor } from "./McpServerEditor.js";
@@ -92,6 +93,71 @@ function setup(
   return { controller, sent, mounted };
 }
 
+const existingOAuth: McpServerListItemWire = {
+  server: {
+    id: "glean",
+    serverName: "Glean",
+    enabled: true,
+    transport: "streamable-http",
+    url: "https://mcp.example/rpc",
+    auth: {
+      kind: "oauth",
+      clientId: "issued-client",
+      authorizeUrl: "https://idp.example/authorize",
+      tokenUrl: "https://idp.example/token",
+      scopes: [],
+      redirectPath: "/callback",
+    },
+    toolCallTimeoutMs: 30_000,
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1_000,
+      maxDelayMs: 30_000,
+      maxAttempts: 5,
+    },
+    createdAt: "created",
+    updatedAt: "updated",
+  },
+  status: { state: "disconnected" },
+  toolCount: 0,
+  disabledToolCount: 0,
+};
+
+/** Opens an edit draft for an already provisioned OAuth-over-HTTP server. */
+function setupEdit() {
+  const sent: unknown[] = [];
+  let next = 0;
+  const controller = new McpController(
+    (command) => sent.push(structuredClone(command)),
+    vi.fn(),
+    () => `request-${++next}`,
+  );
+  controller.updateView({
+    section: "mcp",
+    servers: [existingOAuth],
+    secretStates: "available",
+    oauth: {
+      kind: "loopback",
+      origin: "http://127.0.0.1:54321",
+      discovery: "available",
+      authorization: "available",
+    },
+  });
+  controller.openEdit("glean");
+  render(
+    <McpServerEditor
+      controller={controller}
+      locale="en"
+      draft={controller.snapshot().editor!}
+      secretStates="available"
+      oauthDiscovery="available"
+      oauthAuthorization="available"
+      oauthOrigin="http://127.0.0.1:54321"
+    />,
+  );
+  return { controller, sent };
+}
+
 /** Switches the draft to an OAuth-over-HTTP server with the given URL. */
 function selectOAuthHttp(url = "https://mcp.example/rpc"): void {
   fireEvent.click(screen.getByLabelText("Streamable HTTP"));
@@ -111,18 +177,23 @@ function fillMandatoryStdio(name = "Headers", command = "mcp"): void {
   });
 }
 
+/** Reveals the Advanced group, which holds every authentication detail. */
+function openAdvanced(): void {
+  const disclosure = screen.getByRole("button", { name: /Advanced|高级/ });
+  if (disclosure.getAttribute("aria-expanded") !== "true") {
+    fireEvent.click(disclosure);
+  }
+}
+
 function declareHeader(name = "Authorization"): void {
   fireEvent.change(screen.getByLabelText("Authentication"), {
     target: { value: "headers" },
   });
+  openAdvanced();
   fireEvent.click(screen.getByRole("button", { name: "Add header" }));
   fireEvent.change(screen.getByLabelText("Header name 1"), {
     target: { value: name },
   });
-}
-
-function openAdvanced(): void {
-  fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 }
 
 function recordSuccess(requestId: string): McpOperationMessage {
@@ -151,7 +222,7 @@ describe.each([
   ["en", "Transport", "Command", "Authentication", "Save"],
   ["zh", "传输方式", "命令", "身份验证", "保存"],
 ] as const)("McpServerEditor locale %s", (locale, transport, command, auth, save) => {
-  it("uses a dialog and keeps environment, timeout, and reconnect fields advanced", () => {
+  it("uses a dialog and keeps OAuth, timeout, and reconnect fields advanced", () => {
     setup(locale);
     expect(screen.getByRole("dialog", {
       name: locale === "en" ? "Add MCP server" : "添加 MCP 服务器",
@@ -164,12 +235,20 @@ describe.each([
     expect(screen.getByLabelText("URL")).toBeVisible();
 
     fireEvent.change(screen.getByLabelText(auth), { target: { value: "oauth" } });
-    for (const name of locale === "en"
+    const oauthFields = locale === "en"
       ? ["Client ID", "Authorize URL", "Token URL", "Scopes", "Redirect path"]
-      : ["客户端 ID", "授权 URL", "令牌 URL", "作用域", "重定向路径"]) {
+      : ["客户端 ID", "授权 URL", "令牌 URL", "作用域", "重定向路径"];
+    for (const name of oauthFields) {
+      expect(screen.queryByLabelText(name)).toBeNull();
+    }
+    expect(screen.queryByRole("button", {
+      name: locale === "en" ? "Discover from server URL" : "从服务 URL 自动发现",
+    })).toBeNull();
+
+    openAdvanced();
+    for (const name of oauthFields) {
       expect(screen.getByLabelText(name)).toBeVisible();
     }
-    fireEvent.click(screen.getByRole("button", { name: /Advanced|高级/ }));
     expect(screen.getByLabelText(/Tool call timeout|工具调用超时/)).toBeVisible();
     expect(screen.getByLabelText(/Initial delay|初始延迟/)).toBeVisible();
     expect(screen.getByLabelText(/Maximum delay|最大延迟/)).toBeVisible();
@@ -203,6 +282,7 @@ describe.each([
 it("seeds the redirect path the plugin defaults to", () => {
   setup();
   selectOAuthHttp();
+  openAdvanced();
 
   expect(screen.getByLabelText("Redirect path")).toHaveValue("/callback");
   // The client id is provider-specific, so it stays empty and stays flagged.
@@ -225,7 +305,10 @@ describe("OAuth authorization", () => {
 
     const authorize = screen.getByRole("button", { name: "Add & Authorize" });
     expect(authorize).toBeEnabled();
-    expect(screen.getByLabelText("Client ID")).toHaveValue("");
+    // The easy path asks for nothing the provider issues.
+    for (const label of ["Client ID", "Authorize URL", "Token URL", "Client secret"]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
     fireEvent.click(authorize);
 
     expect(sent).toEqual([{
@@ -256,6 +339,58 @@ describe("OAuth authorization", () => {
     expect(screen.queryByRole("button", { name: "Add & Authorize" })).toBeNull();
   });
 
+  // Provisioning writes a new record, so editing an authorized server offers
+  // Save; re-authorization belongs to the detail view's Authorize.
+  it("keeps Add & Authorize off an edit draft", () => {
+    const { controller, sent } = setupEdit();
+
+    expect(screen.getByRole("dialog", { name: "Edit MCP server" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Add & Authorize" })).toBeNull();
+    expect(controller.provisionOAuth()).toBe(false);
+    expect(sent).toEqual([]);
+    expect(controller.snapshot().authorizing).toBe(false);
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("saves an OAuth record completed from Advanced", () => {
+    const { controller, sent } = setup();
+    selectOAuthHttp();
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Manual" },
+    });
+    expect(controller.editorValid()).toBe(false);
+
+    openAdvanced();
+    for (const [label, value] of [
+      ["Client ID", "manual-client"],
+      ["Authorize URL", "https://idp.example/authorize"],
+      ["Token URL", "https://idp.example/token"],
+    ] as const) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+
+    expect(controller.editorValid()).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      kind: "runMcpOperation",
+      operation: {
+        kind: "upsertServer",
+        server: {
+          serverName: "Manual",
+          url: "https://mcp.example/rpc",
+          auth: {
+            kind: "oauth",
+            clientId: "manual-client",
+            authorizeUrl: "https://idp.example/authorize",
+            tokenUrl: "https://idp.example/token",
+            redirectPath: "/callback",
+          },
+        },
+      },
+    });
+  });
+
   it("shows the loopback callback URI under Advanced", () => {
     setup("en", false, "available", "available");
     selectOAuthHttp();
@@ -272,6 +407,7 @@ describe("OAuth discovery", () => {
 
   it("offers discovery only for an OAuth-over-HTTP draft", () => {
     setup();
+    openAdvanced();
     expect(screen.queryByRole("button", {
       name: "Discover from server URL",
     })).toBeNull();
@@ -290,6 +426,7 @@ describe("OAuth discovery", () => {
   it("hides discovery when the mounted plugin cannot discover", () => {
     setup("en", false, "unavailable");
     selectOAuthHttp();
+    openAdvanced();
 
     expect(screen.queryByRole("button", {
       name: "Discover from server URL",
@@ -300,6 +437,7 @@ describe("OAuth discovery", () => {
   it("sends the request, reports progress, and fills the discovered fields", () => {
     const { controller, sent } = setup();
     selectOAuthHttp();
+    openAdvanced();
 
     fireEvent.click(discoverButton());
     expect(sent.at(-1)).toEqual({
@@ -340,6 +478,7 @@ describe("OAuth discovery", () => {
   it("refuses without a URL and reports a discovery failure", () => {
     const { controller, sent } = setup();
     selectOAuthHttp("");
+    openAdvanced();
 
     fireEvent.click(discoverButton());
     expect(sent).toEqual([]);
@@ -369,6 +508,7 @@ describe("OAuth discovery", () => {
   it("tells the operator to re-enter a registration client secret", () => {
     const { controller } = setup();
     selectOAuthHttp();
+    openAdvanced();
     fireEvent.click(discoverButton());
 
     act(() => {
@@ -670,6 +810,7 @@ it("clears local secret fields on disconnect and clears staged intent on unmount
   fireEvent.change(screen.getByLabelText("Authentication"), {
     target: { value: "oauth" },
   });
+  openAdvanced();
   const secret = screen.getByLabelText<HTMLInputElement>("Client secret");
   fireEvent.change(secret, { target: { value: "temporary-secret" } });
   act(() => controller.disconnect());
@@ -683,6 +824,7 @@ it("clears local secret fields on disconnect and clears staged intent on unmount
   fireEvent.change(screen.getByLabelText("Authentication"), {
     target: { value: "oauth" },
   });
+  openAdvanced();
   fireEvent.change(screen.getByLabelText("Client secret"), {
     target: { value: "unmount-secret" },
   });

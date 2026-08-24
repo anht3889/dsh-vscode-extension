@@ -3402,6 +3402,7 @@ describe("App optional section lifecycle", () => {
       fireEvent.change(screen.getByLabelText("Authentication"), {
         target: { value: "headers" },
       });
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
       fireEvent.click(screen.getByRole("button", { name: "Add header" }));
       fireEvent.change(screen.getByLabelText("Header name 1"), {
         target: { value: "Authorization" },
@@ -3442,6 +3443,9 @@ describe("App optional section lifecycle", () => {
       answerSectionRead("mcp", MCP);
 
       expect(screen.getByLabelText("Server name")).toHaveValue("Alpha Draft");
+      // The remounted editor starts collapsed; the draft keeps the header name
+      // while the secret value is left to be retyped.
+      fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
       expect(screen.getByLabelText("Header name 1")).toHaveValue("Authorization");
       expect(screen.getByLabelText("Header value 1")).toHaveValue("");
 
@@ -3534,6 +3538,7 @@ describe("App optional section lifecycle", () => {
     fireEvent.change(screen.getByLabelText("Authentication"), {
       target: { value: "headers" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
     fireEvent.click(screen.getByRole("button", { name: "Add header" }));
     fireEvent.change(screen.getByLabelText("Header name 1"), {
       target: { value: "Authorization" },

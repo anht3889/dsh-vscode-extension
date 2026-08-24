@@ -589,13 +589,17 @@ export class McpController {
   }
 
   /**
-   * Provision and launch OAuth for the open HTTP draft.
+   * Provision and launch OAuth for the open create draft.
+   *
+   * Provisioning writes a new catalog record, so an edit draft refuses here and
+   * re-authorizes an existing server through {@link startOAuth} instead.
    * @returns whether a request was sent.
    */
   provisionOAuth(): boolean {
     const editor = this.editor;
     if (
       editor === undefined ||
+      editor.mode !== "create" ||
       !this.connected ||
       this.view?.oauth.authorization !== "available" ||
       this.view.oauth.discovery !== "available" ||

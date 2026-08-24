@@ -8,7 +8,8 @@ import type {
 
 const { showWarningMessage, workspace, openExternal } = vi.hoisted(() => ({
   showWarningMessage: vi.fn(),
-  openExternal: vi.fn(async () => true),
+  // The parameter is declared so the recorded call carries the opened URI.
+  openExternal: vi.fn(async (_target: { toString(): string }) => true),
   workspace: {
     workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
   },
@@ -1111,7 +1112,8 @@ describe("MCP authorize URL host open", () => {
     expect(openExternal).toHaveBeenCalledWith(
       expect.objectContaining({ toString: expect.any(Function) }),
     );
-    expect(openExternal.mock.calls[0]?.[0].toString()).toBe(
+    const [opened] = openExternal.mock.calls[0] ?? [];
+    expect(opened?.toString()).toBe(
       "https://idp.example/authorize?client_id=issued",
     );
     expect(postMessage).toHaveBeenCalledWith(message);

@@ -64,6 +64,12 @@ const negative = (value: number): boolean =>
  * component still holds every requested value, so one Save writes the record
  * and then the secrets. The explicit controls appear only when a value is no
  * longer held — a request that outlived its secret epoch.
+ *
+ * The default form carries only what an OAuth create needs — name, transport,
+ * URL, and **Add & Authorize**. Authentication detail (headers, OAuth
+ * endpoints, client credentials, discovery, the loopback callback URI) and
+ * tuning (timeout, reconnect, stdio environment) sit behind **Advanced**, which
+ * is where a record the plugin cannot authorize is completed by hand.
  */
 export function McpServerEditor({
   controller,
@@ -141,7 +147,9 @@ export function McpServerEditor({
   const busy = snapshot.pending.includes(owner);
   const awaitingSecrets = secretRequest !== undefined;
   const disabled = busy || awaitingSecrets || !snapshot.connected;
-  const canProvision = oauthAuthorization === "available" &&
+  // Provisioning creates a record; an edit re-authorizes from the detail view.
+  const canProvision = draft.mode === "create" &&
+    oauthAuthorization === "available" &&
     oauthDiscovery === "available" &&
     draft.transport === "streamable-http" &&
     draft.auth.kind === "oauth";
@@ -343,73 +351,6 @@ export function McpServerEditor({
               )}
             />
           </label>
-          {advancedOpen ? (
-            <>
-            <fieldset className="dsh-mcp-repeat" disabled={disabled}>
-            <legend>{settingsText(locale, "mcpEnvironment")}</legend>
-            {draft.env.map((entry, index) => (
-              <div key={index}>
-                <input
-                  aria-label={formatSettingsText(locale, "mcpEnvName", {
-                    index: index + 1,
-                  })}
-                  value={entry.name}
-                  {...flag(`env-${index}`, entry.name === "")}
-                  onChange={(event) => {
-                    const env = structuredClone(draft.env);
-                    env[index]!.name = event.currentTarget.value;
-                    controller.setEditorField("env", env);
-                  }}
-                />
-                <input
-                  aria-label={formatSettingsText(locale, "mcpEnvValue", {
-                    index: index + 1,
-                  })}
-                  value={entry.value}
-                  onChange={(event) => {
-                    const env = structuredClone(draft.env);
-                    env[index]!.value = event.currentTarget.value;
-                    controller.setEditorField("env", env);
-                  }}
-                />
-                <button
-                  type="button"
-                  aria-label={formatSettingsText(locale, "mcpRemoveEnvironment", {
-                    index: index + 1,
-                  })}
-                  onClick={() =>
-                    controller.setEditorField(
-                      "env",
-                      draft.env.filter((_, current) => current !== index),
-                    )}
-                >
-                  {settingsText(locale, "delete")}
-                </button>
-                {hint(`env-${index}`, entry.name === "")}
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() =>
-                controller.setEditorField(
-                  "env",
-                  [...draft.env, { name: "", value: "" }],
-                )}
-            >
-              {settingsText(locale, "mcpAddEnvironment")}
-            </button>
-          </fieldset>
-          <p className="dsh-settings-hint">
-            {settingsText(locale, "mcpEnvPlainText")}
-          </p>
-          {textField(
-            "cwd",
-            "mcpWorkingDirectory",
-            draft.cwd,
-            (value) => controller.setEditorField("cwd", value),
-          )}
-            </>
-          ) : null}
         </>
       ) : (
         textField(
@@ -435,172 +376,6 @@ export function McpServerEditor({
         </select>
       </label>
 
-      {draft.auth.kind === "headers" ? (
-        <fieldset className="dsh-mcp-repeat" disabled={disabled}>
-          <legend>{settingsText(locale, "mcpAuthHeaders")}</legend>
-          {draft.auth.headerNames.map((name, index) => (
-            <div key={index}>
-              <input
-                aria-label={formatSettingsText(locale, "mcpHeaderName", {
-                  index: index + 1,
-                })}
-                value={name}
-                {...flag(`header-${index}`, name === "")}
-                onChange={(event) => replaceHeaderName(index, event.currentTarget.value)}
-              />
-              <input
-                type="password"
-                autoComplete="new-password"
-                aria-label={formatSettingsText(locale, "mcpHeaderValue", {
-                  index: index + 1,
-                })}
-                aria-describedby={`${id}-secret-hint`}
-                value={secrets[name] ?? ""}
-                onChange={(event) => setSecret(name, event.currentTarget.value)}
-              />
-              <button
-                type="button"
-                aria-label={formatSettingsText(locale, "mcpRemoveHeader", {
-                  index: index + 1,
-                })}
-                onClick={() => {
-                  controller.stageSecret(name, "");
-                  setSecrets((current) => {
-                    const next = { ...current };
-                    delete next[name];
-                    return next;
-                  });
-                  controller.setEditorField("auth", {
-                    kind: "headers",
-                    headerNames: draft.auth.kind === "headers"
-                      ? draft.auth.headerNames.filter((_, current) => current !== index)
-                      : [],
-                  });
-                }}
-              >
-                {settingsText(locale, "delete")}
-              </button>
-              {hint(`header-${index}`, name === "")}
-            </div>
-          ))}
-          <button
-            type="button"
-            onClick={() => controller.setEditorField("auth", {
-              kind: "headers",
-              headerNames: draft.auth.kind === "headers"
-                ? [...draft.auth.headerNames, ""]
-                : [""],
-            })}
-          >
-            {settingsText(locale, "mcpAddHeader")}
-          </button>
-        </fieldset>
-      ) : null}
-
-      {draft.auth.kind === "oauth" ? (
-        <div className="dsh-mcp-oauth-fields">
-          {draft.transport !== "streamable-http" ? null : (
-            <div className="dsh-mcp-discover">
-              <p className="dsh-settings-hint">
-                {settingsText(
-                  locale,
-                  oauthDiscovery === "available"
-                    ? "mcpDiscoverOAuthHint"
-                    : "mcpDiscoverUnavailable",
-                )}
-              </p>
-              {oauthDiscovery === "unavailable" ? null : (
-                <button
-                  type="button"
-                  disabled={disabled || snapshot.discovering}
-                  onClick={() => controller.discoverOAuth()}
-                >
-                  {settingsText(
-                    locale,
-                    snapshot.discovering
-                      ? "mcpDiscoveringOAuth"
-                      : "mcpDiscoverOAuth",
-                  )}
-                </button>
-              )}
-              {snapshot.discoveryErrorKey === undefined ? null : (
-                <p className="dsh-settings-error" role="alert">
-                  {settingsText(locale, snapshot.discoveryErrorKey)}
-                  {snapshot.discoveryErrorDetail === undefined
-                    ? ""
-                    : `: ${snapshot.discoveryErrorDetail}`}
-                </p>
-              )}
-              {snapshot.discoveryNoticeKey === undefined ? null : (
-                <p role="status">
-                  {settingsText(locale, snapshot.discoveryNoticeKey)}
-                </p>
-              )}
-            </div>
-          )}
-          {([
-            ["clientId", "mcpClientId", "text"],
-            ["authorizeUrl", "mcpAuthorizeUrl", "url"],
-            ["tokenUrl", "mcpTokenUrl", "url"],
-            ["redirectPath", "mcpRedirectPath", "text"],
-          ] as const).map(([field, key, type]) => (
-            <React.Fragment key={field}>
-              {textField(
-                `oauth-${field}`,
-                key,
-                draft.auth.kind === "oauth" ? draft.auth[field] : "",
-                (value) => {
-                  if (draft.auth.kind !== "oauth") return;
-                  controller.setEditorField("auth", {
-                    ...draft.auth,
-                    [field]: value,
-                  });
-                },
-                oauthInvalid(field),
-                type,
-              )}
-            </React.Fragment>
-          ))}
-          {textField(
-            "oauth-scopes",
-            "mcpScopes",
-            draft.auth.scopes.join(", "),
-            (value) => {
-              if (draft.auth.kind !== "oauth") return;
-              controller.setEditorField("auth", {
-                ...draft.auth,
-                scopes: value.split(",").map((scope) => scope.trim()).filter(Boolean),
-              });
-            },
-          )}
-          <label className="dsh-mcp-field">
-            <span>{settingsText(locale, "mcpClientSecret")}</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={secrets.OAUTH_CLIENT_SECRET ?? ""}
-              disabled={disabled}
-              aria-describedby={`${id}-secret-hint`}
-              onChange={(event) =>
-                setSecret("OAUTH_CLIENT_SECRET", event.currentTarget.value)}
-            />
-          </label>
-          {oauthAuthorization === "unavailable" ? (
-            <p className="dsh-mcp-oauth-note">
-              {settingsText(locale, "mcpOAuthNote")}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-      {draft.auth.kind === "none" ? null : (
-        <p id={`${id}-secret-hint`} className="dsh-settings-hint">
-          {settingsText(locale, "mcpSecretReadback")}
-          {secretStates === "unavailable"
-            ? ` ${settingsText(locale, "mcpSecretUnknown")}`
-            : ""}
-        </p>
-      )}
-
       <button
         className="dsh-mcp-disclosure"
         type="button"
@@ -611,10 +386,249 @@ export function McpServerEditor({
       </button>
       {!advancedOpen ? null : (
         <div className="dsh-mcp-advanced">
-          {draft.auth.kind !== "oauth" || oauthOrigin === undefined ? null : (
-            <p className="dsh-settings-hint">
-              {settingsText(locale, "mcpOAuthLoopbackHint")}{" "}
-              <code>{oauthOrigin}{draft.auth.redirectPath}</code>
+          {draft.transport !== "stdio" ? null : (
+            <>
+              <fieldset className="dsh-mcp-repeat" disabled={disabled}>
+                <legend>{settingsText(locale, "mcpEnvironment")}</legend>
+                {draft.env.map((entry, index) => (
+                  <div key={index}>
+                    <input
+                      aria-label={formatSettingsText(locale, "mcpEnvName", {
+                        index: index + 1,
+                      })}
+                      value={entry.name}
+                      {...flag(`env-${index}`, entry.name === "")}
+                      onChange={(event) => {
+                        const env = structuredClone(draft.env);
+                        env[index]!.name = event.currentTarget.value;
+                        controller.setEditorField("env", env);
+                      }}
+                    />
+                    <input
+                      aria-label={formatSettingsText(locale, "mcpEnvValue", {
+                        index: index + 1,
+                      })}
+                      value={entry.value}
+                      onChange={(event) => {
+                        const env = structuredClone(draft.env);
+                        env[index]!.value = event.currentTarget.value;
+                        controller.setEditorField("env", env);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label={formatSettingsText(
+                        locale,
+                        "mcpRemoveEnvironment",
+                        { index: index + 1 },
+                      )}
+                      onClick={() =>
+                        controller.setEditorField(
+                          "env",
+                          draft.env.filter((_, current) => current !== index),
+                        )}
+                    >
+                      {settingsText(locale, "delete")}
+                    </button>
+                    {hint(`env-${index}`, entry.name === "")}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() =>
+                    controller.setEditorField(
+                      "env",
+                      [...draft.env, { name: "", value: "" }],
+                    )}
+                >
+                  {settingsText(locale, "mcpAddEnvironment")}
+                </button>
+              </fieldset>
+              <p className="dsh-settings-hint">
+                {settingsText(locale, "mcpEnvPlainText")}
+              </p>
+              {textField(
+                "cwd",
+                "mcpWorkingDirectory",
+                draft.cwd,
+                (value) => controller.setEditorField("cwd", value),
+              )}
+            </>
+          )}
+          {draft.auth.kind === "headers" ? (
+            <fieldset className="dsh-mcp-repeat" disabled={disabled}>
+              <legend>{settingsText(locale, "mcpAuthHeaders")}</legend>
+              {draft.auth.headerNames.map((name, index) => (
+                <div key={index}>
+                  <input
+                    aria-label={formatSettingsText(locale, "mcpHeaderName", {
+                      index: index + 1,
+                    })}
+                    value={name}
+                    {...flag(`header-${index}`, name === "")}
+                    onChange={(event) =>
+                      replaceHeaderName(index, event.currentTarget.value)}
+                  />
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    aria-label={formatSettingsText(locale, "mcpHeaderValue", {
+                      index: index + 1,
+                    })}
+                    aria-describedby={`${id}-secret-hint`}
+                    value={secrets[name] ?? ""}
+                    onChange={(event) => setSecret(name, event.currentTarget.value)}
+                  />
+                  <button
+                    type="button"
+                    aria-label={formatSettingsText(locale, "mcpRemoveHeader", {
+                      index: index + 1,
+                    })}
+                    onClick={() => {
+                      controller.stageSecret(name, "");
+                      setSecrets((current) => {
+                        const next = { ...current };
+                        delete next[name];
+                        return next;
+                      });
+                      controller.setEditorField("auth", {
+                        kind: "headers",
+                        headerNames: draft.auth.kind === "headers"
+                          ? draft.auth.headerNames.filter((_, current) =>
+                            current !== index)
+                          : [],
+                      });
+                    }}
+                  >
+                    {settingsText(locale, "delete")}
+                  </button>
+                  {hint(`header-${index}`, name === "")}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => controller.setEditorField("auth", {
+                  kind: "headers",
+                  headerNames: draft.auth.kind === "headers"
+                    ? [...draft.auth.headerNames, ""]
+                    : [""],
+                })}
+              >
+                {settingsText(locale, "mcpAddHeader")}
+              </button>
+            </fieldset>
+          ) : null}
+
+          {draft.auth.kind === "oauth" ? (
+            <div className="dsh-mcp-oauth-fields">
+              {draft.transport !== "streamable-http" ? null : (
+                <div className="dsh-mcp-discover">
+                  <p className="dsh-settings-hint">
+                    {settingsText(
+                      locale,
+                      oauthDiscovery === "available"
+                        ? "mcpDiscoverOAuthHint"
+                        : "mcpDiscoverUnavailable",
+                    )}
+                  </p>
+                  {oauthDiscovery === "unavailable" ? null : (
+                    <button
+                      type="button"
+                      disabled={disabled || snapshot.discovering}
+                      onClick={() => controller.discoverOAuth()}
+                    >
+                      {settingsText(
+                        locale,
+                        snapshot.discovering
+                          ? "mcpDiscoveringOAuth"
+                          : "mcpDiscoverOAuth",
+                      )}
+                    </button>
+                  )}
+                  {snapshot.discoveryErrorKey === undefined ? null : (
+                    <p className="dsh-settings-error" role="alert">
+                      {settingsText(locale, snapshot.discoveryErrorKey)}
+                      {snapshot.discoveryErrorDetail === undefined
+                        ? ""
+                        : `: ${snapshot.discoveryErrorDetail}`}
+                    </p>
+                  )}
+                  {snapshot.discoveryNoticeKey === undefined ? null : (
+                    <p role="status">
+                      {settingsText(locale, snapshot.discoveryNoticeKey)}
+                    </p>
+                  )}
+                </div>
+              )}
+              {([
+                ["clientId", "mcpClientId", "text"],
+                ["authorizeUrl", "mcpAuthorizeUrl", "url"],
+                ["tokenUrl", "mcpTokenUrl", "url"],
+                ["redirectPath", "mcpRedirectPath", "text"],
+              ] as const).map(([field, key, type]) => (
+                <React.Fragment key={field}>
+                  {textField(
+                    `oauth-${field}`,
+                    key,
+                    draft.auth.kind === "oauth" ? draft.auth[field] : "",
+                    (value) => {
+                      if (draft.auth.kind !== "oauth") return;
+                      controller.setEditorField("auth", {
+                        ...draft.auth,
+                        [field]: value,
+                      });
+                    },
+                    oauthInvalid(field),
+                    type,
+                  )}
+                </React.Fragment>
+              ))}
+              {textField(
+                "oauth-scopes",
+                "mcpScopes",
+                draft.auth.scopes.join(", "),
+                (value) => {
+                  if (draft.auth.kind !== "oauth") return;
+                  controller.setEditorField("auth", {
+                    ...draft.auth,
+                    scopes: value
+                      .split(",")
+                      .map((scope) => scope.trim())
+                      .filter(Boolean),
+                  });
+                },
+              )}
+              <label className="dsh-mcp-field">
+                <span>{settingsText(locale, "mcpClientSecret")}</span>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={secrets.OAUTH_CLIENT_SECRET ?? ""}
+                  disabled={disabled}
+                  aria-describedby={`${id}-secret-hint`}
+                  onChange={(event) =>
+                    setSecret("OAUTH_CLIENT_SECRET", event.currentTarget.value)}
+                />
+              </label>
+              {oauthOrigin === undefined || draft.auth.kind !== "oauth" ? null : (
+                <p className="dsh-settings-hint">
+                  {settingsText(locale, "mcpOAuthLoopbackHint")}{" "}
+                  <code>{oauthOrigin}{draft.auth.redirectPath}</code>
+                </p>
+              )}
+              {oauthAuthorization === "unavailable" ? (
+                <p className="dsh-mcp-oauth-note">
+                  {settingsText(locale, "mcpOAuthNote")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {draft.auth.kind === "none" ? null : (
+            <p id={`${id}-secret-hint`} className="dsh-settings-hint">
+              {settingsText(locale, "mcpSecretReadback")}
+              {secretStates === "unavailable"
+                ? ` ${settingsText(locale, "mcpSecretUnknown")}`
+                : ""}
             </p>
           )}
           {numberField(

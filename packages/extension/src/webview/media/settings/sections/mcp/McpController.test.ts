@@ -423,6 +423,29 @@ describe("McpController OAuth authorization", () => {
     expect(sent).toEqual([]);
   });
 
+  // Provisioning writes a new catalog record, so an existing server is
+  // re-authorized through startOAuth rather than provisioned again.
+  it("refuses provision for an edit draft", () => {
+    const { controller, sent } = bench();
+    controller.updateView(LOOPBACK_VIEW);
+    controller.openEdit("alpha");
+    controller.setEditorField("transport", "streamable-http");
+    controller.setEditorField("url", "https://mcp.example/rpc");
+    controller.setEditorField("auth", {
+      kind: "oauth",
+      clientId: "",
+      authorizeUrl: "",
+      tokenUrl: "",
+      scopes: [],
+      redirectPath: "/callback",
+    });
+
+    expect(controller.snapshot().editor?.mode).toBe("edit");
+    expect(controller.provisionOAuth()).toBe(false);
+    expect(sent).toEqual([]);
+    expect(controller.snapshot().authorizing).toBe(false);
+  });
+
   it("starts OAuth for a selected OAuth server", () => {
     const { controller, sent } = bench();
     const oauthDetail: McpServerDetailWire = {
