@@ -658,10 +658,10 @@ describe("App slash flow", () => {
         },
       },
     });
+    expect(
+      screen.getByLabelText("Command", { selector: "article" }),
+    ).toHaveTextContent("/goal write tests");
     expect(screen.queryByLabelText("You")).toBeNull();
-    expect(screen.getByRole("button", { name: "Command" })).toHaveTextContent(
-      "/goal write tests",
-    );
     expect(input).toHaveValue("");
 
     postMessage.mockClear();
@@ -950,6 +950,62 @@ describe("App slash flow", () => {
     expect(
       screen.queryByRole("option", { name: /\/brainstorming/ }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("App timeline", () => {
+  it("renders reasoning before markdown and collapses thinking when text starts", () => {
+    renderReady();
+
+    host({
+      kind: "event",
+      sessionId: "session-1",
+      event: {
+        type: "assistant/chunk",
+        seq: 1,
+        time: 1,
+        data: {
+          chunk: {
+            type: "reasoning-delta",
+            index: 0,
+            text: "First thought\nLatest thought",
+          },
+        },
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Think" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(
+      screen.getByLabelText("Think", { selector: "article" }),
+    ).toHaveTextContent("Latest thought");
+
+    host({
+      kind: "event",
+      sessionId: "session-1",
+      event: {
+        type: "assistant/chunk",
+        seq: 2,
+        time: 2,
+        data: {
+          chunk: { type: "text-delta", index: 0, text: "## Final answer" },
+        },
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Think" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    const collapsedThinking = screen.getByLabelText("Think", {
+      selector: "article",
+    });
+    expect(collapsedThinking).toHaveTextContent("First thought");
+    expect(collapsedThinking).not.toHaveTextContent("Latest thought");
+    expect(screen.getByRole("heading", { level: 2, name: "Final answer" }))
+      .toBeVisible();
   });
 });
 

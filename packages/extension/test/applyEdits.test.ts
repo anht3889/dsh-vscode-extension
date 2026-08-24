@@ -58,6 +58,69 @@ describe("diffsFromEvent", () => {
       { path: "/x/b.ts", oldText: "x", newText: "y" },
     ]);
   });
+
+  it("extracts diffs from a DiffResultView", () => {
+    expect(diffsFromEvent({
+      type: "tool/result",
+      seq: 1,
+      time: 0,
+      data: { message: {} },
+      view: {
+        for: "result",
+        view: {
+          card: "diff",
+          diffs: [{ path: "/a.ts", oldText: null, newText: "x" }],
+        },
+      },
+    })).toEqual([{ path: "/a.ts", oldText: "", newText: "x" }]);
+  });
+
+  it("appends distinct presenter diffs after a legacy diff", () => {
+    expect(diffsFromEvent({
+      type: "tool/result",
+      seq: 1,
+      time: 0,
+      data: {
+        message: {},
+        meta: { path: "/a.ts", oldText: "a", newText: "b" },
+      },
+      view: {
+        for: "result",
+        view: {
+          card: "diff",
+          diffs: [{ path: "/b.ts", oldText: "c", newText: "d" }],
+        },
+      },
+    })).toEqual([
+      { path: "/a.ts", oldText: "a", newText: "b" },
+      { path: "/b.ts", oldText: "c", newText: "d" },
+    ]);
+  });
+
+  it("does not duplicate a legacy diff repeated in the presenter view", () => {
+    expect(diffsFromEvent({
+      type: "tool/result",
+      seq: 1,
+      time: 0,
+      data: {
+        message: {},
+        arguments: { path: "/a.ts", oldText: "a", newText: "b" },
+      },
+      view: {
+        for: "result",
+        view: {
+          card: "diff",
+          diffs: [
+            { path: "/a.ts", oldText: "a", newText: "b" },
+            { path: "/b.ts", oldText: null, newText: "c" },
+          ],
+        },
+      },
+    })).toEqual([
+      { path: "/a.ts", oldText: "a", newText: "b" },
+      { path: "/b.ts", oldText: "", newText: "c" },
+    ]);
+  });
 });
 
 describe("resolveDiffPath", () => {
