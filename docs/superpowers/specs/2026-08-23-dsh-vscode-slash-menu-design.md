@@ -34,7 +34,7 @@ Give the VS Code and Cursor sidebar composer the same `/` discovery and selectio
 | Skill pick | Replace token with `/name `; submit as an ordinary user message |
 | Unknown slash line | Submit as an ordinary user message |
 | Keyboard | Arrow highlight, Enter pick, Escape dismiss, Shift+Enter newline |
-| Commands in transcript | Render `command/run` as a user slash turn |
+| Commands in transcript | Render `command/run` as a user slash turn. **Superseded** by [2026-08-25-dsh-vscode-agent-timeline-design.md](2026-08-25-dsh-vscode-agent-timeline-design.md): the stream uses a command card. Composer slash semantics in this spec are unchanged. |
 | Missing services | Mark only the affected source unavailable; do not fail startup |
 
 ## 4. Architecture
