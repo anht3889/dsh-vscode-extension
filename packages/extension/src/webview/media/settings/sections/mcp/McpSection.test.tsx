@@ -37,7 +37,12 @@ const view: McpSettingsView = {
     disabledToolCount: 0,
   }],
   secretStates: "available",
-  oauth: { kind: "manual", reason: "no-callback-origin" },
+  oauth: {
+    kind: "manual",
+    reason: "no-callback-origin",
+    discovery: "available",
+    authorization: "unavailable",
+  },
 };
 
 const ready: SettingsSectionState = {
@@ -101,6 +106,25 @@ function setup(
   };
 }
 
+function showAlphaDetail(controller: McpController, requestId = "request-1"): void {
+  act(() => {
+    controller.select("alpha");
+    controller.receiveDetail({
+      kind: "mcpServer",
+      requestId,
+      result: {
+        ok: true,
+        detail: {
+          server: view.servers[0]!.server,
+          status: view.servers[0]!.status,
+          tools: [],
+          secrets: { kind: "known", secrets: [] },
+        },
+      },
+    });
+  });
+}
+
 describe.each([
   ["en", "MCP servers", "Loading settings…", "Retry"],
   ["zh", "MCP 服务器", "正在加载设置…", "重试"],
@@ -119,7 +143,7 @@ describe.each([
     expect(screen.getByRole("button", { name: retry })).toBeVisible();
   });
 
-  it("renders list and detail, then replaces detail with the editor", () => {
+  it("opens server details and the editor as nested dialogs", () => {
     const { controller } = setup(locale);
     expect(screen.getByRole("list", { name: listName })).toBeVisible();
     fireEvent.click(screen.getByRole("button", {
@@ -138,10 +162,11 @@ describe.each([
         },
       },
     }));
-    expect(screen.getByRole("region", { name: /Alpha/ })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: /Alpha/ })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /Edit Alpha|编辑 Alpha/ }));
-    expect(screen.getByRole("form")).toBeVisible();
-    expect(screen.queryByRole("region", { name: /Alpha/ })).toBeNull();
+    expect(screen.getByRole("dialog", { name: /Add MCP server|添加 MCP 服务器|Edit MCP server|编辑 MCP 服务器/ }))
+      .toBeVisible();
+    expect(screen.queryByRole("dialog", { name: /Alpha/ })).toBeNull();
   });
 });
 
@@ -150,6 +175,7 @@ it("reports both destructive confirmation transitions and unmount ownership", ()
   const { controller, unmount } = setup("en", ready, onConfirmationChange);
   expect(onConfirmationChange).toHaveBeenLastCalledWith(false);
 
+  showAlphaDetail(controller);
   fireEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
   expect(onConfirmationChange).toHaveBeenLastCalledWith(true);
   fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -171,6 +197,7 @@ it("releases modal close blocking before rendering an empty list", () => {
       onRequestClose={onRequestClose}
     />,
   );
+  showAlphaDetail(controller, "request");
   fireEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
   fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
   expect(onRequestClose).not.toHaveBeenCalled();
@@ -183,10 +210,11 @@ it("releases modal close blocking before rendering an empty list", () => {
   expect(onRequestClose).toHaveBeenCalledWith("button", false);
 });
 
-it("keeps a shrinkable MCP layout hook for narrow and zoomed settings", () => {
+it("uses the plugin-style single-column server list", () => {
   setup();
-  expect(document.querySelector(".dsh-mcp-layout")).toBeInTheDocument();
-  expect(document.querySelector(".dsh-mcp-secondary")).toBeInTheDocument();
+  expect(document.querySelector(".dsh-mcp-layout")).not.toBeInTheDocument();
+  expect(document.querySelector(".dsh-mcp-secondary")).not.toBeInTheDocument();
+  expect(document.querySelector(".dsh-mcp-server-list")).toBeInTheDocument();
 });
 
 it.each([

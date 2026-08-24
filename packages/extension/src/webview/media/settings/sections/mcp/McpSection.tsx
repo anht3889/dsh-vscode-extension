@@ -70,29 +70,30 @@ export function McpSection({
       {snapshot.noticeKey === undefined ? null : (
         <p role="status">{settingsText(locale, snapshot.noticeKey)}</p>
       )}
-      <div className="dsh-mcp-layout">
-        <McpServerList
+      <McpServerList
+        controller={controller}
+        locale={locale}
+        snapshot={snapshot}
+      />
+      {snapshot.editor !== undefined ? (
+        <McpServerEditor
+          controller={controller}
+          locale={locale}
+          draft={snapshot.editor}
+          secretStates={snapshot.secretStates}
+          oauthDiscovery={snapshot.oauthDiscovery}
+          oauthAuthorization={snapshot.oauthAuthorization}
+          {...(snapshot.oauthOrigin === undefined
+            ? {}
+            : { oauthOrigin: snapshot.oauthOrigin })}
+        />
+      ) : snapshot.selectedServerId !== undefined ? (
+        <McpServerDetail
           controller={controller}
           locale={locale}
           snapshot={snapshot}
         />
-        <div className="dsh-mcp-secondary">
-          {snapshot.editor !== undefined ? (
-            <McpServerEditor
-              controller={controller}
-              locale={locale}
-              draft={snapshot.editor}
-              secretStates={snapshot.secretStates}
-            />
-          ) : snapshot.selectedServerId !== undefined ? (
-            <McpServerDetail
-              controller={controller}
-              locale={locale}
-              snapshot={snapshot}
-            />
-          ) : null}
-        </div>
-      </div>
+      ) : null}
     </section>
   );
 }

@@ -42,7 +42,12 @@ const saved: McpServerDetailWire = {
   },
 };
 
-function setup(locale: "en" | "zh" = "en", strict = false) {
+function setup(
+  locale: "en" | "zh" = "en",
+  strict = false,
+  discovery: "available" | "unavailable" = "available",
+  authorization: "available" | "unavailable" = "unavailable",
+) {
   const sent: unknown[] = [];
   let next = 0;
   const controller = new McpController(
@@ -54,7 +59,19 @@ function setup(locale: "en" | "zh" = "en", strict = false) {
     section: "mcp",
     servers: [],
     secretStates: "available",
-    oauth: { kind: "manual", reason: "no-callback-origin" },
+    oauth: authorization === "available"
+      ? {
+          kind: "loopback",
+          origin: "http://127.0.0.1:54321",
+          discovery,
+          authorization,
+        }
+      : {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery,
+          authorization,
+        },
   });
   controller.openCreate();
   const draft = controller.snapshot().editor!;
@@ -64,10 +81,24 @@ function setup(locale: "en" | "zh" = "en", strict = false) {
       locale={locale}
       draft={draft}
       secretStates="available"
+      oauthDiscovery={discovery}
+      oauthAuthorization={authorization}
+      {...(authorization === "available"
+        ? { oauthOrigin: "http://127.0.0.1:54321" }
+        : {})}
     />
   );
   const mounted = render(strict ? <StrictMode>{editor}</StrictMode> : editor);
   return { controller, sent, mounted };
+}
+
+/** Switches the draft to an OAuth-over-HTTP server with the given URL. */
+function selectOAuthHttp(url = "https://mcp.example/rpc"): void {
+  fireEvent.click(screen.getByLabelText("Streamable HTTP"));
+  fireEvent.change(screen.getByLabelText("URL"), { target: { value: url } });
+  fireEvent.change(screen.getByLabelText("Authentication"), {
+    target: { value: "oauth" },
+  });
 }
 
 /** Fills the two fields the contract requires of every stdio record. */
@@ -88,6 +119,10 @@ function declareHeader(name = "Authorization"): void {
   fireEvent.change(screen.getByLabelText("Header name 1"), {
     target: { value: name },
   });
+}
+
+function openAdvanced(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 }
 
 function recordSuccess(requestId: string): McpOperationMessage {
@@ -116,10 +151,14 @@ describe.each([
   ["en", "Transport", "Command", "Authentication", "Save"],
   ["zh", "传输方式", "命令", "身份验证", "保存"],
 ] as const)("McpServerEditor locale %s", (locale, transport, command, auth, save) => {
-  it("switches transport fields and exposes every OAuth and reconnect field", () => {
+  it("uses a dialog and keeps environment, timeout, and reconnect fields advanced", () => {
     setup(locale);
+    expect(screen.getByRole("dialog", {
+      name: locale === "en" ? "Add MCP server" : "添加 MCP 服务器",
+    })).toBeVisible();
     expect(screen.getByRole("group", { name: transport })).toBeVisible();
     expect(screen.getByLabelText(command)).toBeVisible();
+    expect(screen.queryByLabelText(/Tool call timeout|工具调用超时/)).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: /Streamable HTTP/ }));
     expect(screen.queryByLabelText(command)).toBeNull();
     expect(screen.getByLabelText("URL")).toBeVisible();
@@ -130,12 +169,17 @@ describe.each([
       : ["客户端 ID", "授权 URL", "令牌 URL", "作用域", "重定向路径"]) {
       expect(screen.getByLabelText(name)).toBeVisible();
     }
+    fireEvent.click(screen.getByRole("button", { name: /Advanced|高级/ }));
     expect(screen.getByLabelText(/Tool call timeout|工具调用超时/)).toBeVisible();
     expect(screen.getByLabelText(/Initial delay|初始延迟/)).toBeVisible();
     expect(screen.getByLabelText(/Maximum delay|最大延迟/)).toBeVisible();
     expect(screen.getByLabelText(/Maximum attempts|最大尝试次数/)).toBeVisible();
     expect(screen.getByRole("button", { name: save })).toBeVisible();
-    expect(screen.queryByRole("button", { name: /Authorize|授权|Discover|发现/ })).toBeNull();
+    // Discovery needs no callback origin; authorization does, so it stays out.
+    expect(screen.getByRole("button", {
+      name: locale === "en" ? "Discover from server URL" : "从服务 URL 自动发现",
+    })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Authorize|授权/ })).toBeNull();
   });
 
   it("localizes the refusal and the offending-field hints", () => {
@@ -150,6 +194,203 @@ describe.each([
       locale === "en" ? /required/ : /必填/,
     );
     expect(controller.snapshot().pending).toEqual([]);
+  });
+});
+
+// The plugin's own editor seeds `/callback` and its catalog refuses a redirect
+// path without a leading slash, so an empty seed left a new OAuth server
+// unsavable on a field the operator had no way to guess.
+it("seeds the redirect path the plugin defaults to", () => {
+  setup();
+  selectOAuthHttp();
+
+  expect(screen.getByLabelText("Redirect path")).toHaveValue("/callback");
+  // The client id is provider-specific, so it stays empty and stays flagged.
+  expect(screen.getByLabelText("Client ID")).toHaveValue("");
+  expect(screen.getByLabelText("Client ID")).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  expect(screen.getByLabelText("Redirect path"))
+    .not.toHaveAttribute("aria-invalid", "true");
+});
+
+describe("OAuth authorization", () => {
+  it("offers Add & Authorize from name and URL and sends only provision", () => {
+    const { controller, sent } = setup("en", false, "available", "available");
+    selectOAuthHttp();
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Glean" },
+    });
+
+    const authorize = screen.getByRole("button", { name: "Add & Authorize" });
+    expect(authorize).toBeEnabled();
+    expect(screen.getByLabelText("Client ID")).toHaveValue("");
+    fireEvent.click(authorize);
+
+    expect(sent).toEqual([{
+      kind: "runMcpOperation",
+      requestId: "request-1",
+      operation: {
+        kind: "provisionOAuthServer",
+        serverName: "Glean",
+        url: "https://mcp.example/rpc",
+        enabled: true,
+      },
+    }]);
+    expect(screen.getByRole("button", {
+      name: "Opening the identity provider…",
+    })).toBeDisabled();
+    expect(JSON.stringify(controller.snapshot())).not.toMatch(
+      /clientSecret|accessToken|refreshToken/,
+    );
+  });
+
+  it("hides Add & Authorize when authorization is unavailable", () => {
+    setup();
+    selectOAuthHttp();
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Glean" },
+    });
+
+    expect(screen.queryByRole("button", { name: "Add & Authorize" })).toBeNull();
+  });
+
+  it("shows the loopback callback URI under Advanced", () => {
+    setup("en", false, "available", "available");
+    selectOAuthHttp();
+    openAdvanced();
+
+    expect(screen.getByText(/Callback origin/)).toBeVisible();
+    expect(screen.getByText("http://127.0.0.1:54321/callback")).toBeVisible();
+  });
+});
+
+describe("OAuth discovery", () => {
+  const discoverButton = (): HTMLElement =>
+    screen.getByRole("button", { name: "Discover from server URL" });
+
+  it("offers discovery only for an OAuth-over-HTTP draft", () => {
+    setup();
+    expect(screen.queryByRole("button", {
+      name: "Discover from server URL",
+    })).toBeNull();
+
+    selectOAuthHttp();
+    expect(discoverButton()).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText("Authentication"), {
+      target: { value: "headers" },
+    });
+    expect(screen.queryByRole("button", {
+      name: "Discover from server URL",
+    })).toBeNull();
+  });
+
+  it("hides discovery when the mounted plugin cannot discover", () => {
+    setup("en", false, "unavailable");
+    selectOAuthHttp();
+
+    expect(screen.queryByRole("button", {
+      name: "Discover from server URL",
+    })).toBeNull();
+    expect(screen.getByText(/cannot discover OAuth endpoints/)).toBeVisible();
+  });
+
+  it("sends the request, reports progress, and fills the discovered fields", () => {
+    const { controller, sent } = setup();
+    selectOAuthHttp();
+
+    fireEvent.click(discoverButton());
+    expect(sent.at(-1)).toEqual({
+      kind: "discoverMcpOAuth",
+      requestId: "request-1",
+      url: "https://mcp.example/rpc",
+    });
+    expect(isInboundMessage(sent.at(-1))).toBe(true);
+    expect(screen.getByRole("button", { name: "Discovering…" })).toBeDisabled();
+
+    act(() => {
+      controller.receiveDiscovery({
+        kind: "mcpOAuthDiscovery",
+        requestId: "request-1",
+        result: {
+          ok: true,
+          discovery: {
+            clientId: "issued-client",
+            authorizeUrl: "https://auth.example/authorize",
+            tokenUrl: "https://auth.example/token",
+            scopes: ["docs:read"],
+            registered: true,
+            clientSecretIssued: false,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByLabelText("Client ID")).toHaveValue("issued-client");
+    expect(screen.getByLabelText("Authorize URL"))
+      .toHaveValue("https://auth.example/authorize");
+    expect(screen.getByLabelText("Token URL"))
+      .toHaveValue("https://auth.example/token");
+    expect(screen.getByLabelText("Scopes")).toHaveValue("docs:read");
+    expect(discoverButton()).toBeEnabled();
+  });
+
+  it("refuses without a URL and reports a discovery failure", () => {
+    const { controller, sent } = setup();
+    selectOAuthHttp("");
+
+    fireEvent.click(discoverButton());
+    expect(sent).toEqual([]);
+    expect(screen.getByRole("alert"))
+      .toHaveTextContent("Enter the HTTP server URL first.");
+
+    fireEvent.change(screen.getByLabelText("URL"), {
+      target: { value: "https://mcp.example/rpc" },
+    });
+    fireEvent.click(discoverButton());
+    act(() => {
+      controller.receiveDiscovery({
+        kind: "mcpOAuthDiscovery",
+        requestId: "request-1",
+        result: {
+          ok: false,
+          error: { code: "mcp-rejected", message: "no metadata published" },
+        },
+      });
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "OAuth discovery failed: no metadata published",
+    );
+  });
+
+  it("tells the operator to re-enter a registration client secret", () => {
+    const { controller } = setup();
+    selectOAuthHttp();
+    fireEvent.click(discoverButton());
+
+    act(() => {
+      controller.receiveDiscovery({
+        kind: "mcpOAuthDiscovery",
+        requestId: "request-1",
+        result: {
+          ok: true,
+          discovery: {
+            clientId: "issued-client",
+            authorizeUrl: "https://auth.example/authorize",
+            tokenUrl: "https://auth.example/token",
+            scopes: [],
+            registered: true,
+            clientSecretIssued: true,
+          },
+        },
+      });
+    });
+
+    expect(screen.getByRole("status"))
+      .toHaveTextContent(/issued a client secret/);
   });
 });
 
@@ -185,6 +426,7 @@ it("marks every naturally reachable offending field without sending anything", (
   const { controller, sent } = setup();
   fillMandatoryStdio();
   expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  openAdvanced();
 
   fireEvent.change(screen.getByLabelText("Tool call timeout (ms)"), {
     target: { value: "" },
@@ -213,10 +455,17 @@ it("marks every naturally reachable offending field without sending anything", (
     target: { value: "oauth" },
   });
   expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-  for (const label of ["Client ID", "Authorize URL", "Token URL", "Redirect path"]) {
+  // The redirect path arrives seeded with the plugin's default, so only the
+  // provider-specific fields are empty on arrival.
+  for (const label of ["Client ID", "Authorize URL", "Token URL"]) {
     expect(describedText(screen.getByLabelText(label)))
       .toBe("This value is required.");
   }
+  fireEvent.change(screen.getByLabelText("Redirect path"), {
+    target: { value: "" },
+  });
+  expect(describedText(screen.getByLabelText("Redirect path")))
+    .toBe("This value is required.");
 
   fireEvent.change(screen.getByLabelText("Authentication"), {
     target: { value: "none" },
@@ -310,7 +559,12 @@ it("writes the automatic secret command once under duplicated effects", () => {
       section: "mcp",
       servers: [],
       secretStates: "available",
-      oauth: { kind: "manual", reason: "no-callback-origin" },
+      oauth: {
+        kind: "manual",
+        reason: "no-callback-origin",
+        discovery: "available",
+        authorization: "unavailable",
+      },
     });
   });
 
@@ -377,6 +631,7 @@ it("shows plugin record validation verbatim and warns that env is plain text", (
   });
 
   expect(screen.getByRole("alert")).toHaveTextContent("Plugin says name is invalid");
+  openAdvanced();
   expect(screen.getByText(/environment values are stored in plain text/i)).toBeVisible();
   expect(secretCommands(sent)).toEqual([]);
   expect(sent).toHaveLength(1);

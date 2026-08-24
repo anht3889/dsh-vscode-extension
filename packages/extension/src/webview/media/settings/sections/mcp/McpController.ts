@@ -3,6 +3,7 @@ import type {
   McpAuthWire,
   McpLogEntryWire,
   McpLogsMessage,
+  McpOAuthDiscoveryMessage,
   McpOperationMessage,
   McpOperationWire,
   McpServerDetailWire,
@@ -42,6 +43,12 @@ export interface McpEditorDraft {
 export interface McpSnapshot {
   servers: McpServerListItemWire[];
   secretStates: "available" | "unavailable";
+  /** Whether the mounted plugin exposes OAuth endpoint discovery. */
+  oauthDiscovery: "available" | "unavailable";
+  /** Whether the mounted plugin can launch OAuth with a callback origin. */
+  oauthAuthorization: "available" | "unavailable";
+  /** Callback origin named by a loopback-capable MCP plugin. */
+  oauthOrigin?: string;
   selectedServerId?: string;
   detail?: McpServerDetailWire;
   logs: McpLogEntryWire[];
@@ -55,12 +62,21 @@ export interface McpSnapshot {
   connected: boolean;
   errorKey?: SettingsCopyKey;
   noticeKey?: SettingsCopyKey;
+  /** Whether an OAuth discovery request is awaiting its reply. */
+  discovering: boolean;
+  /** Whether OAuth is launching or waiting for browser completion. */
+  authorizing: boolean;
+  discoveryErrorKey?: SettingsCopyKey;
+  discoveryErrorDetail?: string;
+  discoveryNoticeKey?: SettingsCopyKey;
 }
 
 type SecretValues = Readonly<Record<string, string | undefined>>;
 type PollKey = "list" | "detail" | "logs";
 type OperationStage =
   | "upsert"
+  | "provision"
+  | "authorize"
   | "secrets"
   | "remove"
   | "enabled"
@@ -93,6 +109,10 @@ const SECRET_FAILED_KEY: SettingsCopyKey = "mcpSecretFailure";
 const SECRET_DECLINED_KEY: SettingsCopyKey = "mcpSecretDeclined";
 const LIST_LOAD_FAILED_KEY: SettingsCopyKey = "mcpListLoadFailed";
 const INVALID_RECORD_KEY: SettingsCopyKey = "mcpInvalidRecord";
+const DISCOVER_NEED_URL_KEY: SettingsCopyKey = "mcpDiscoverNeedUrl";
+const DISCOVER_FAILED_KEY: SettingsCopyKey = "mcpDiscoverFailed";
+const DISCOVER_CLIENT_SECRET_KEY: SettingsCopyKey = "mcpDiscoverClientSecret";
+const DISCOVER_NO_CLIENT_ID_KEY: SettingsCopyKey = "mcpDiscoverNoClientId";
 
 const EDITABLE_FIELDS = new Set<keyof McpEditorDraft>([
   "serverName",
@@ -218,6 +238,12 @@ export class McpController {
   private confirmation?: { kind: "delete" | "clear-oauth"; serverId: string };
   private errorKey?: SettingsCopyKey;
   private noticeKey?: SettingsCopyKey;
+  private pendingDiscovery?: string;
+  private discoveryErrorKey?: SettingsCopyKey;
+  private discoveryErrorDetail?: string;
+  private discoveryNoticeKey?: SettingsCopyKey;
+  private authorizing = false;
+  private authorizingServerId?: string;
   private selectionEpoch = 0;
   private readonly inFlight = new Set<PollKey>();
   private pendingDetail?: PendingRead;
@@ -263,6 +289,14 @@ export class McpController {
     this.errorKey = undefined;
     const ids = new Set(view.servers.map((item) => item.server.id));
     if (
+      this.authorizingServerId !== undefined &&
+      view.servers.some((item) =>
+        item.server.id === this.authorizingServerId &&
+        item.status.state !== "disconnected")
+    ) {
+      this.clearAuthorization();
+    }
+    if (
       this.confirmation !== undefined &&
       !ids.has(this.confirmation.serverId)
     ) {
@@ -306,6 +340,8 @@ export class McpController {
     this.pendingByRequest.clear();
     this.secretRequest = undefined;
     this.confirmation = undefined;
+    this.clearDiscovery();
+    this.clearAuthorization();
     this.clearSensitiveIntent(true);
     if (interrupted.length > 0) {
       this.noticeKey = DISCONNECTED_OPERATION_KEY;
@@ -320,6 +356,11 @@ export class McpController {
   snapshot = (): McpSnapshot => ({
     servers: structuredClone(this.view?.servers ?? []),
     secretStates: this.view?.secretStates ?? "unavailable",
+    oauthDiscovery: this.view?.oauth.discovery ?? "unavailable",
+    oauthAuthorization: this.view?.oauth.authorization ?? "unavailable",
+    ...(this.view?.oauth.kind === "loopback"
+      ? { oauthOrigin: this.view.oauth.origin }
+      : {}),
     ...(this.selectedServerId === undefined
       ? {}
       : { selectedServerId: this.selectedServerId }),
@@ -345,6 +386,17 @@ export class McpController {
     connected: this.connected,
     ...(this.errorKey === undefined ? {} : { errorKey: this.errorKey }),
     ...(this.noticeKey === undefined ? {} : { noticeKey: this.noticeKey }),
+    discovering: this.pendingDiscovery !== undefined,
+    authorizing: this.authorizing,
+    ...(this.discoveryErrorKey === undefined
+      ? {}
+      : { discoveryErrorKey: this.discoveryErrorKey }),
+    ...(this.discoveryErrorDetail === undefined
+      ? {}
+      : { discoveryErrorDetail: this.discoveryErrorDetail }),
+    ...(this.discoveryNoticeKey === undefined
+      ? {}
+      : { discoveryNoticeKey: this.discoveryNoticeKey }),
   });
 
   select(serverId: string | undefined): void {
@@ -410,6 +462,8 @@ export class McpController {
     this.confirmation = undefined;
     this.errorKey = undefined;
     this.noticeKey = "unavailable";
+    this.clearDiscovery();
+    this.clearAuthorization();
     this.clearSensitiveIntent(true);
     this.notify();
   }
@@ -423,6 +477,7 @@ export class McpController {
     this.editor = createDraft();
     this.editorBaseline = structuredClone(comparableDraft(this.editor));
     this.secretRequest = undefined;
+    this.clearDiscovery();
     this.clearSensitiveIntent();
     this.notify();
   }
@@ -450,6 +505,7 @@ export class McpController {
     }
     this.editorBaseline = structuredClone(comparableDraft(this.editor));
     this.secretRequest = undefined;
+    this.clearDiscovery();
     this.clearSensitiveIntent();
     this.notify();
   }
@@ -460,6 +516,8 @@ export class McpController {
     this.editor = undefined;
     this.editorBaseline = undefined;
     this.secretRequest = undefined;
+    this.clearDiscovery();
+    this.clearAuthorization();
     this.clearSensitiveIntent(!declined && this.stagedSecretNames.size > 0);
     this.notify();
   }
@@ -476,6 +534,10 @@ export class McpController {
     delete this.editor.errorDetail;
     delete this.editor.secretFailure;
     if (field === "auth") this.pruneUnauthorizedSecrets();
+    // A discovery in flight was requested against the previous target.
+    if (field === "url" || field === "auth" || field === "transport") {
+      this.clearDiscovery();
+    }
     this.secretRequest = undefined;
     this.notify();
   }
@@ -492,6 +554,151 @@ export class McpController {
     delete editor.errorKey;
     delete editor.errorDetail;
     this.notify();
+  }
+
+  /**
+   * Ask the host to resolve OAuth endpoints from the draft's server URL.
+   *
+   * Refuses unless an OAuth-over-HTTP draft carries a URL, so the relay never
+   * receives a command the contract would drop without replying.
+   * @returns whether a request was sent.
+   */
+  discoverOAuth(): boolean {
+    const editor = this.editor;
+    if (
+      editor === undefined ||
+      !this.connected ||
+      this.pendingDiscovery !== undefined ||
+      this.ownerBusy(this.editorOwner()) ||
+      editor.transport !== "streamable-http" ||
+      editor.auth.kind !== "oauth"
+    ) return false;
+    const url = editor.url.trim();
+    if (url === "") {
+      this.clearDiscovery();
+      this.discoveryErrorKey = DISCOVER_NEED_URL_KEY;
+      this.notify();
+      return false;
+    }
+    const requestId = this.requestId();
+    this.clearDiscovery();
+    this.pendingDiscovery = requestId;
+    this.send({ kind: "discoverMcpOAuth", requestId, url });
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Provision and launch OAuth for the open HTTP draft.
+   * @returns whether a request was sent.
+   */
+  provisionOAuth(): boolean {
+    const editor = this.editor;
+    if (
+      editor === undefined ||
+      !this.connected ||
+      this.view?.oauth.authorization !== "available" ||
+      this.view.oauth.discovery !== "available" ||
+      editor.transport !== "streamable-http" ||
+      editor.auth.kind !== "oauth" ||
+      editor.serverName.trim() === "" ||
+      editor.url.trim() === "" ||
+      this.ownerBusy(this.editorOwner()) ||
+      this.authorizing
+    ) return false;
+    const operation: PendingOperation = {
+      requestId: this.requestId(),
+      owner: this.editorOwner(),
+      stage: "provision",
+    };
+    this.authorizing = true;
+    this.authorizingServerId = undefined;
+    this.startOperation(operation, {
+      kind: "provisionOAuthServer",
+      serverName: editor.serverName.trim(),
+      url: editor.url.trim(),
+      enabled: editor.enabled,
+    });
+    return true;
+  }
+
+  /**
+   * Launch OAuth for the selected existing OAuth server.
+   * @returns whether a request was sent.
+   */
+  startOAuth(): boolean {
+    const serverId = this.selectedServerId;
+    if (
+      serverId === undefined ||
+      !this.connected ||
+      this.view?.oauth.authorization !== "available" ||
+      this.authorizing ||
+      this.ownerBusy(serverId)
+    ) return false;
+    const detailAuth = this.detail?.server.id === serverId
+      ? this.detail.server.auth
+      : undefined;
+    const listAuth = this.view.servers.find((item) =>
+      item.server.id === serverId)?.server.auth;
+    if ((detailAuth ?? listAuth)?.kind !== "oauth") return false;
+    const operation: PendingOperation = {
+      requestId: this.requestId(),
+      owner: serverId,
+      serverId,
+      stage: "authorize",
+    };
+    this.authorizing = true;
+    this.authorizingServerId = serverId;
+    this.startOperation(operation, { kind: "startOAuth", serverId });
+    return true;
+  }
+
+  /**
+   * Apply a discovery reply to the open draft.
+   *
+   * Discovered endpoints replace the draft's, while a client id or scope list
+   * the authorization server did not publish leaves a hand-entered value in
+   * place. A registration secret is reported, never received.
+   *
+   * @param message - the correlated discovery reply.
+   * @returns whether this reply belonged to the open draft.
+   */
+  receiveDiscovery(message: McpOAuthDiscoveryMessage): boolean {
+    if (this.pendingDiscovery !== message.requestId) return false;
+    this.pendingDiscovery = undefined;
+    const editor = this.editor;
+    if (editor === undefined || editor.auth.kind !== "oauth") {
+      this.notify();
+      return false;
+    }
+    if (!message.result.ok) {
+      this.discoveryErrorKey = DISCOVER_FAILED_KEY;
+      this.discoveryErrorDetail = message.result.error.message;
+      this.notify();
+      return true;
+    }
+    const discovery = message.result.discovery;
+    editor.auth = {
+      kind: "oauth",
+      clientId: discovery.clientId === ""
+        ? editor.auth.clientId
+        : discovery.clientId,
+      authorizeUrl: discovery.authorizeUrl,
+      tokenUrl: discovery.tokenUrl,
+      scopes: discovery.scopes.length === 0
+        ? [...editor.auth.scopes]
+        : [...discovery.scopes],
+      redirectPath: editor.auth.redirectPath,
+    };
+    delete editor.errorKey;
+    delete editor.errorDetail;
+    if (discovery.clientSecretIssued) {
+      this.discoveryNoticeKey = DISCOVER_CLIENT_SECRET_KEY;
+    } else if (!discovery.registered && editor.auth.clientId === "") {
+      this.discoveryNoticeKey = DISCOVER_NO_CLIENT_ID_KEY;
+    }
+    this.notify();
+    return true;
   }
 
   /**
@@ -667,6 +874,8 @@ export class McpController {
     this.editor = undefined;
     this.editorBaseline = undefined;
     this.secretRequest = undefined;
+    this.clearDiscovery();
+    this.clearAuthorization();
     this.clearSensitiveIntent(true);
     this.notify();
   }
@@ -687,6 +896,12 @@ export class McpController {
     }
     if (message.result.detail.server.id !== pending.serverId) return false;
     this.detail = structuredClone(message.result.detail);
+    if (
+      this.authorizingServerId === pending.serverId &&
+      message.result.detail.status.state !== "disconnected"
+    ) {
+      this.clearAuthorization();
+    }
     this.notify();
     return true;
   }
@@ -719,6 +934,9 @@ export class McpController {
     if (operation === undefined) return false;
     this.removePending(operation);
     if (!message.result.ok) {
+      if (operation.stage === "provision" || operation.stage === "authorize") {
+        this.clearAuthorization();
+      }
       this.restoreTool(operation);
       if (operation.stage === "secrets") {
         const names = [...new Set([
@@ -747,6 +965,13 @@ export class McpController {
 
     const returnedDetail = message.result.detail;
     if (returnedDetail !== undefined) this.adoptDetail(returnedDetail);
+    if (operation.stage === "provision" || operation.stage === "authorize") {
+      if (returnedDetail !== undefined) {
+        this.authorizingServerId = returnedDetail.server.id;
+      }
+      this.notify();
+      return true;
+    }
     if (operation.stage === "upsert") {
       const ownsEditor = this.operationOwnsEditor(operation);
       const serverId = returnedDetail?.server.id ?? operation.serverId;
@@ -830,7 +1055,10 @@ export class McpController {
 
   private startServerOperation(
     serverId: string,
-    stage: Exclude<OperationStage, "upsert" | "secrets">,
+    stage: Exclude<
+      OperationStage,
+      "upsert" | "provision" | "authorize" | "secrets"
+    >,
     wire: McpOperationWire,
     toolRollback?: { name: string; enabled: boolean },
   ): boolean {
@@ -922,13 +1150,13 @@ export class McpController {
       ? SECRET_FAILED_KEY
       : OPERATION_FAILED_KEY;
     if (
-      operation.stage !== "upsert" ||
+      (operation.stage !== "upsert" && operation.stage !== "provision") ||
       editor === undefined ||
       !this.operationOwnsEditor(operation)
     ) return;
     editor.errorKey = OPERATION_FAILED_KEY;
     if (
-      operation.stage === "upsert" &&
+      (operation.stage === "upsert" || operation.stage === "provision") &&
       foreignValidationDetail !== undefined
     ) {
       editor.errorDetail = foreignValidationDetail;
@@ -1002,6 +1230,18 @@ export class McpController {
     this.inFlight.delete("detail");
     this.inFlight.delete("logs");
     if (removed) this.noticeKey = SERVER_REMOVED_KEY;
+  }
+
+  private clearDiscovery(): void {
+    this.pendingDiscovery = undefined;
+    this.discoveryErrorKey = undefined;
+    this.discoveryErrorDetail = undefined;
+    this.discoveryNoticeKey = undefined;
+  }
+
+  private clearAuthorization(): void {
+    this.authorizing = false;
+    this.authorizingServerId = undefined;
   }
 
   private clearSensitiveIntent(forceEpoch = false): void {
@@ -1079,11 +1319,18 @@ export class McpController {
   private operationOwnsEditor(operation: PendingOperation): boolean {
     const editor = this.editor;
     if (editor === undefined) return false;
-    if (operation.stage === "upsert" && operation.owner === CREATE_OWNER) {
+    if (
+      (operation.stage === "upsert" || operation.stage === "provision") &&
+      operation.owner === CREATE_OWNER
+    ) {
       return editor.mode === "create";
     }
     return (
-      (operation.stage === "upsert" || operation.stage === "secrets") &&
+      (
+        operation.stage === "upsert" ||
+        operation.stage === "provision" ||
+        operation.stage === "secrets"
+      ) &&
       operation.serverId !== undefined &&
       editor.mode === "edit" &&
       editor.serverId === operation.serverId
@@ -1096,6 +1343,7 @@ export class McpController {
     const operation = this.pendingByServer.get(this.editorOwner());
     return (
       operation?.stage === "upsert" ||
+      operation?.stage === "provision" ||
       operation?.stage === "secrets"
     );
   }

@@ -380,7 +380,12 @@ const MCP: McpSettingsView = {
     disabledToolCount: 0,
   }],
   secretStates: "available",
-  oauth: { kind: "manual", reason: "no-callback-origin" },
+  oauth: {
+    kind: "manual",
+    reason: "no-callback-origin",
+    discovery: "available",
+    authorization: "unavailable",
+  },
 };
 
 function mcpView(...servers: McpServerDetailWire[]): McpSettingsView {
@@ -564,6 +569,20 @@ function answerMcpDetail(detail: McpServerDetailWire): void {
     requestId: command.requestId,
     result: { ok: true, detail },
   });
+}
+
+function openMcpDetail(detail: McpServerDetailWire = mcpDetail(MCP_SERVER)): void {
+  fireEvent.click(screen.getByRole("button", {
+    name: new RegExp(`${detail.server.serverName}.*Standard input|${detail.server.serverName}.*Streamable HTTP`),
+  }));
+  answerMcpDetail(detail);
+}
+
+function openMcpEditor(detail: McpServerDetailWire = mcpDetail(MCP_SERVER)): void {
+  openMcpDetail(detail);
+  fireEvent.click(screen.getByRole("button", {
+    name: `Edit ${detail.server.serverName}`,
+  }));
 }
 
 async function openSlash(
@@ -3053,7 +3072,7 @@ describe("App optional section lifecycle", () => {
     expect(screen.queryByRole("form")).toBeNull();
     expect(screen.getByRole("listitem", { name: "Beta" })).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    openMcpEditor();
     fireEvent.change(screen.getByLabelText("Server name"), {
       target: { value: "Alpha Prime" },
     });
@@ -3066,7 +3085,8 @@ describe("App optional section lifecycle", () => {
     answerMcpOperation(mcpDetail(renamed));
     expect(screen.getByRole("listitem", { name: "Alpha Prime" })).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Enable Alpha Prime" }));
+    fireEvent.click(within(screen.getByRole("listitem", { name: "Alpha Prime" }))
+      .getByRole("switch", { name: "Enabled" }));
     expect(lastMcpOperation().operation).toEqual({
       kind: "setServerEnabled",
       serverId: "alpha",
@@ -3074,11 +3094,10 @@ describe("App optional section lifecycle", () => {
     });
     const enabled: McpServerWire = { ...renamed, enabled: true };
     answerMcpOperation(mcpDetail(enabled));
-    expect(
-      screen.getByRole("button", { name: "Disable Alpha Prime" }),
-    ).toBeVisible();
+    expect(within(screen.getByRole("listitem", { name: "Alpha Prime" }))
+      .getByRole("switch", { name: "Enabled" })).toHaveAttribute("aria-checked", "true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect Alpha Prime" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(lastMcpOperation().operation).toEqual({
       kind: "connectServer",
       serverId: "alpha",
@@ -3087,22 +3106,12 @@ describe("App optional section lifecycle", () => {
       status: { state: "connected", toolCount: 1, connectedAt: "now" },
       tools: [{ name: "search", description: "Search", enabled: true }],
     }));
-    expect(
-      screen.getByRole("button", { name: "Disconnect Alpha Prime" }),
-    ).toBeVisible();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /Alpha Prime.*Standard input/ }),
-    );
-    answerMcpDetail(mcpDetail(enabled, {
-      status: { state: "connected", toolCount: 1, connectedAt: "now" },
-      tools: [{ name: "search", description: "Search", enabled: true }],
-    }));
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeVisible();
     expect(
       screen.getByRole("heading", { name: "Alpha Prime", level: 3 }),
     ).toBeVisible();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "search" }));
+    fireEvent.click(screen.getByRole("switch", { name: "search" }));
     expect(lastMcpOperation().operation).toEqual({
       kind: "setToolEnabled",
       serverId: "alpha",
@@ -3113,7 +3122,8 @@ describe("App optional section lifecycle", () => {
       status: { state: "connected", toolCount: 1, connectedAt: "now" },
       tools: [{ name: "search", description: "Search", enabled: false }],
     }));
-    expect(screen.getByRole("checkbox", { name: "search" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "search" }))
+      .toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Alpha Prime" }));
     const confirmation = screen.getByRole("alertdialog", {
@@ -3137,6 +3147,7 @@ describe("App optional section lifecycle", () => {
         screen.getByRole("button", { name: /Alpha.*Standard input/ }),
       );
       answerMcpDetail(mcpDetail(MCP_SERVER));
+      fireEvent.click(screen.getByRole("button", { name: "Logs" }));
 
       act(() => {
         vi.advanceTimersByTime(2_000);
@@ -3223,7 +3234,7 @@ describe("App optional section lifecycle", () => {
 
   it("keeps an open MCP editor while an invalidated section refreshes", () => {
     openMcpSection();
-    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    openMcpEditor();
     fireEvent.change(screen.getByLabelText("Server name"), {
       target: { value: "Alpha Draft" },
     });
@@ -3237,7 +3248,7 @@ describe("App optional section lifecycle", () => {
     })));
 
     expect(screen.getByLabelText("Server name")).toHaveValue("Alpha Draft");
-    expect(screen.getByText("Connected · 2 tools · now")).toBeVisible();
+    expect(screen.getByText(/Connected · 2 tools · now/)).toBeVisible();
   });
 
   it("hydrates the MCP list once from the initial section read", () => {
@@ -3258,6 +3269,7 @@ describe("App optional section lifecycle", () => {
     };
     openMcpSection(mcpView(mcpDetail(MCP_SERVER), mcpDetail(beta)));
 
+    openMcpDetail();
     fireEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
     fireEvent.click(
       within(screen.getByRole("alertdialog", { name: "Delete MCP server?" }))
@@ -3277,7 +3289,8 @@ describe("App optional section lifecycle", () => {
 
   it("keeps an adopted status and tool change across a section switch", () => {
     openMcpSection();
-    fireEvent.click(screen.getByRole("button", { name: "Enable Alpha" }));
+    fireEvent.click(within(screen.getByRole("listitem", { name: "Alpha" }))
+      .getByRole("switch", { name: "Enabled" }));
     answerMcpOperation(mcpDetail({ ...MCP_SERVER, enabled: true }, {
       status: { state: "connected", toolCount: 2, connectedAt: "now" },
       tools: [
@@ -3285,14 +3298,15 @@ describe("App optional section lifecycle", () => {
         { name: "fetch", description: "Fetch", enabled: false },
       ],
     }));
-    expect(screen.getByText("Connected · 2 tools · now")).toBeVisible();
+    expect(screen.getByText(/Connected · 2 tools · now/)).toBeVisible();
     postMessage.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.click(screen.getByRole("button", { name: "MCP" }));
 
-    expect(screen.getByText("Connected · 2 tools · now")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Disable Alpha" })).toBeVisible();
+    expect(screen.getByText(/Connected · 2 tools · now/)).toBeVisible();
+    expect(within(screen.getByRole("listitem", { name: "Alpha" }))
+      .getByRole("switch", { name: "Enabled" })).toHaveAttribute("aria-checked", "true");
     expect(sectionReads("mcp")).toHaveLength(0);
   });
 
@@ -3320,7 +3334,7 @@ describe("App optional section lifecycle", () => {
 
   it("discards MCP state only when its capability disappears", () => {
     openMcpSection();
-    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    openMcpEditor();
     fireEvent.change(screen.getByLabelText("Server name"), {
       target: { value: "Alpha Draft" },
     });
@@ -3473,7 +3487,7 @@ describe("App optional section lifecycle", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "MCP" }));
     answerSectionRead("mcp", MCP);
-    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    openMcpEditor();
     fireEvent.change(screen.getByLabelText("Server name"), {
       target: { value: "Alpha Draft" },
     });
@@ -3497,6 +3511,7 @@ describe("App optional section lifecycle", () => {
 
   it("blocks settings dismissal while an MCP delete confirmation is open", () => {
     openMcpSection();
+    openMcpDetail();
     fireEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
     expect(screen.getByRole("alertdialog", {
       name: "Delete MCP server?",
@@ -3515,7 +3530,7 @@ describe("App optional section lifecycle", () => {
 
   it("saves a staged MCP header secret without retaining its value", () => {
     openMcpSection();
-    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    openMcpEditor();
     fireEvent.change(screen.getByLabelText("Authentication"), {
       target: { value: "headers" },
     });

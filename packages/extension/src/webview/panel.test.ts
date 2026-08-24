@@ -1002,7 +1002,12 @@ describe("MCP settings command relay", () => {
       section: "mcp",
       servers: [],
       secretStates: "available",
-      oauth: { kind: "manual", reason: "no-callback-origin", discovery: "available" },
+      oauth: {
+        kind: "manual",
+        reason: "no-callback-origin",
+        discovery: "available",
+        authorization: "unavailable",
+      },
     });
 
     controller.openCreate();

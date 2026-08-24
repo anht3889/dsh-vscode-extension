@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   McpLogsMessage,
+  McpOAuthDiscoveryMessage,
   McpOperationMessage,
   McpServerDetailWire,
   McpServerMessage,
@@ -68,7 +69,22 @@ const VIEW: McpSettingsView = {
     },
   ],
   secretStates: "available",
-  oauth: { kind: "manual", reason: "no-callback-origin" },
+  oauth: {
+    kind: "manual",
+    reason: "no-callback-origin",
+    discovery: "available",
+    authorization: "unavailable",
+  },
+};
+
+const LOOPBACK_VIEW: McpSettingsView = {
+  ...VIEW,
+  oauth: {
+    kind: "loopback",
+    origin: "http://127.0.0.1:54321",
+    discovery: "available",
+    authorization: "available",
+  },
 };
 
 function bench() {
@@ -116,6 +132,7 @@ function logsReply(
 function operationSuccess(
   requestId: string,
   detail: McpServerDetailWire | undefined = DETAIL,
+  authorizeUrl?: string,
 ): McpOperationMessage {
   return {
     kind: "mcpOperation",
@@ -123,6 +140,7 @@ function operationSuccess(
     result: {
       ok: true,
       ...(detail === undefined ? {} : { detail }),
+      ...(authorizeUrl === undefined ? {} : { authorizeUrl }),
     },
   };
 }
@@ -140,6 +158,328 @@ function operationFailure(
     },
   };
 }
+
+function discoveryReply(
+  requestId: string,
+  overrides: Partial<{
+    clientId: string;
+    authorizeUrl: string;
+    tokenUrl: string;
+    scopes: string[];
+    registered: boolean;
+    clientSecretIssued: boolean;
+  }> = {},
+): McpOAuthDiscoveryMessage {
+  return {
+    kind: "mcpOAuthDiscovery",
+    requestId,
+    result: {
+      ok: true,
+      discovery: {
+        clientId: "discovered-client",
+        authorizeUrl: "https://auth.example/authorize",
+        tokenUrl: "https://auth.example/token",
+        scopes: ["docs:read"],
+        registered: true,
+        clientSecretIssued: false,
+        ...overrides,
+      },
+    },
+  };
+}
+
+/** Open a create draft configured as an OAuth-over-HTTP server. */
+function oauthDraft(controller: McpController, url = "https://mcp.example/rpc"): void {
+  controller.openCreate();
+  controller.setEditorField("transport", "streamable-http");
+  controller.setEditorField("url", url);
+  controller.setEditorField("auth", {
+    kind: "oauth",
+    clientId: "",
+    authorizeUrl: "",
+    tokenUrl: "",
+    scopes: [],
+    redirectPath: "/callback",
+  });
+}
+
+describe("McpController OAuth discovery", () => {
+  it("requests discovery for the draft URL and fills the non-secret fields", () => {
+    const { controller, sent } = bench();
+    oauthDraft(controller);
+
+    expect(controller.discoverOAuth()).toBe(true);
+    expect(sent.at(-1)).toEqual({
+      kind: "discoverMcpOAuth",
+      requestId: "mcp-1",
+      url: "https://mcp.example/rpc",
+    });
+    expect(controller.snapshot().discovering).toBe(true);
+
+    expect(controller.receiveDiscovery(discoveryReply("mcp-1"))).toBe(true);
+    expect(controller.snapshot().discovering).toBe(false);
+    expect(controller.snapshot().editor?.auth).toEqual({
+      kind: "oauth",
+      clientId: "discovered-client",
+      authorizeUrl: "https://auth.example/authorize",
+      tokenUrl: "https://auth.example/token",
+      scopes: ["docs:read"],
+      redirectPath: "/callback",
+    });
+  });
+
+  it("keeps a hand-entered client id when discovery registered none", () => {
+    const { controller } = bench();
+    oauthDraft(controller);
+    controller.setEditorField("auth", {
+      kind: "oauth",
+      clientId: "hand-entered",
+      authorizeUrl: "",
+      tokenUrl: "",
+      scopes: [],
+      redirectPath: "/callback",
+    });
+
+    controller.discoverOAuth();
+    controller.receiveDiscovery(
+      discoveryReply("mcp-1", { clientId: "", registered: false }),
+    );
+
+    expect(controller.snapshot().editor?.auth).toMatchObject({
+      clientId: "hand-entered",
+      authorizeUrl: "https://auth.example/authorize",
+    });
+  });
+
+  // A profile that serves no OAuth callback discovers endpoints but cannot
+  // register a client, so the client id stays the operator's to supply. Filling
+  // two of three fields silently would read as a partial failure.
+  it("explains an empty client id when discovery registered nothing", () => {
+    const { controller } = bench();
+    oauthDraft(controller);
+    controller.discoverOAuth();
+
+    controller.receiveDiscovery(
+      discoveryReply("mcp-1", { clientId: "", registered: false }),
+    );
+
+    expect(controller.snapshot().editor?.auth).toMatchObject({
+      clientId: "",
+      authorizeUrl: "https://auth.example/authorize",
+      tokenUrl: "https://auth.example/token",
+    });
+    expect(controller.snapshot().discoveryNoticeKey)
+      .toBe("mcpDiscoverNoClientId");
+  });
+
+  it("stays silent about the client id when the draft already carries one", () => {
+    const { controller } = bench();
+    oauthDraft(controller);
+    controller.setEditorField("auth", {
+      kind: "oauth",
+      clientId: "hand-entered",
+      authorizeUrl: "",
+      tokenUrl: "",
+      scopes: [],
+      redirectPath: "/callback",
+    });
+    controller.discoverOAuth();
+
+    controller.receiveDiscovery(
+      discoveryReply("mcp-1", { clientId: "", registered: false }),
+    );
+
+    expect(controller.snapshot().discoveryNoticeKey).toBeUndefined();
+  });
+
+  it("reports a registration secret the operator must re-enter", () => {
+    const { controller } = bench();
+    oauthDraft(controller);
+    controller.discoverOAuth();
+
+    controller.receiveDiscovery(
+      discoveryReply("mcp-1", { clientSecretIssued: true }),
+    );
+
+    expect(controller.snapshot().discoveryNoticeKey)
+      .toBe("mcpDiscoverClientSecret");
+  });
+
+  it("refuses discovery without an HTTP URL and without OAuth auth", () => {
+    const { controller, sent } = bench();
+    oauthDraft(controller, "   ");
+
+    expect(controller.discoverOAuth()).toBe(false);
+    expect(controller.snapshot().discoveryErrorKey).toBe("mcpDiscoverNeedUrl");
+    expect(sent).toEqual([]);
+
+    controller.setEditorField("url", "https://mcp.example/rpc");
+    controller.setEditorField("auth", { kind: "none" });
+    expect(controller.discoverOAuth()).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  it("refuses discovery with no editor open or while disconnected", () => {
+    const { controller, sent } = bench();
+    expect(controller.discoverOAuth()).toBe(false);
+
+    oauthDraft(controller);
+    controller.disconnect();
+    expect(controller.discoverOAuth()).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  it("surfaces a discovery failure without touching the draft", () => {
+    const { controller } = bench();
+    oauthDraft(controller);
+    controller.discoverOAuth();
+
+    expect(controller.receiveDiscovery({
+      kind: "mcpOAuthDiscovery",
+      requestId: "mcp-1",
+      result: {
+        ok: false,
+        error: { code: "mcp-rejected", message: "no metadata published" },
+      },
+    })).toBe(true);
+
+    expect(controller.snapshot()).toMatchObject({
+      discovering: false,
+      discoveryErrorKey: "mcpDiscoverFailed",
+      discoveryErrorDetail: "no metadata published",
+    });
+    expect(controller.snapshot().editor?.auth).toMatchObject({
+      authorizeUrl: "",
+      tokenUrl: "",
+    });
+  });
+
+  it("drops a reply for an unknown request, a closed editor, and an edited URL", () => {
+    const { controller } = bench();
+    oauthDraft(controller);
+    controller.discoverOAuth();
+    expect(controller.receiveDiscovery(discoveryReply("stale"))).toBe(false);
+
+    controller.closeEditor();
+    expect(controller.receiveDiscovery(discoveryReply("mcp-1"))).toBe(false);
+
+    oauthDraft(controller);
+    controller.discoverOAuth();
+    controller.setEditorField("url", "https://other.example/rpc");
+    expect(controller.snapshot().discovering).toBe(false);
+    expect(controller.receiveDiscovery(discoveryReply("mcp-2"))).toBe(false);
+    expect(controller.snapshot().editor?.auth).toMatchObject({
+      authorizeUrl: "",
+    });
+  });
+
+  it("refuses a second discovery while one is in flight", () => {
+    const { controller, sent } = bench();
+    oauthDraft(controller);
+
+    expect(controller.discoverOAuth()).toBe(true);
+    expect(controller.discoverOAuth()).toBe(false);
+    expect(sent.filter((command) =>
+      (command as { kind: string }).kind === "discoverMcpOAuth")).toHaveLength(1);
+  });
+});
+
+describe("McpController OAuth authorization", () => {
+  it("provisions from name and URL without complete OAuth fields", () => {
+    const { controller, sent } = bench();
+    controller.updateView(LOOPBACK_VIEW);
+    oauthDraft(controller);
+    controller.setEditorField("serverName", "glean");
+
+    expect(controller.provisionOAuth()).toBe(true);
+    expect(sent).toEqual([{
+      kind: "runMcpOperation",
+      requestId: "mcp-1",
+      operation: {
+        kind: "provisionOAuthServer",
+        serverName: "glean",
+        url: "https://mcp.example/rpc",
+        enabled: true,
+      },
+    }]);
+    expect(controller.snapshot()).toMatchObject({
+      authorizing: true,
+      pending: ["create"],
+    });
+    expect(controller.editorValid()).toBe(false);
+  });
+
+  it("refuses provision when authorization or discovery is unavailable", () => {
+    const { controller, sent } = bench();
+    oauthDraft(controller);
+    controller.setEditorField("serverName", "glean");
+
+    expect(controller.provisionOAuth()).toBe(false);
+    controller.updateView({
+      ...LOOPBACK_VIEW,
+      oauth: { ...LOOPBACK_VIEW.oauth, discovery: "unavailable" },
+    });
+    expect(controller.provisionOAuth()).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  it("starts OAuth for a selected OAuth server", () => {
+    const { controller, sent } = bench();
+    const oauthDetail: McpServerDetailWire = {
+      ...DETAIL,
+      server: {
+        ...DETAIL.server,
+        auth: {
+          kind: "oauth",
+          clientId: "client",
+          authorizeUrl: "https://idp.example/authorize",
+          tokenUrl: "https://idp.example/token",
+          scopes: [],
+          redirectPath: "/callback",
+        },
+      },
+    };
+    controller.updateView({
+      ...LOOPBACK_VIEW,
+      servers: [{
+        ...LOOPBACK_VIEW.servers[0]!,
+        server: oauthDetail.server,
+      }],
+    });
+    controller.select("alpha");
+    controller.receiveDetail(detailReply("mcp-1", oauthDetail));
+
+    expect(controller.startOAuth()).toBe(true);
+    expect(sent.at(-1)).toMatchObject({
+      kind: "runMcpOperation",
+      operation: { kind: "startOAuth", serverId: "alpha" },
+    });
+    expect(controller.snapshot().authorizing).toBe(true);
+  });
+
+  it("waits after authorization launch and clears on failure or dismissal", () => {
+    const { controller } = bench();
+    controller.updateView(LOOPBACK_VIEW);
+    oauthDraft(controller);
+    controller.setEditorField("serverName", "glean");
+    controller.provisionOAuth();
+
+    expect(controller.receiveOperation(operationSuccess(
+      "mcp-1",
+      DETAIL,
+      "https://idp.example/authorize",
+    ))).toBe(true);
+    expect(controller.snapshot().authorizing).toBe(true);
+    controller.closeEditor();
+    expect(controller.snapshot().authorizing).toBe(false);
+
+    oauthDraft(controller);
+    controller.setEditorField("serverName", "glean");
+    controller.provisionOAuth();
+    controller.receiveOperation(operationFailure("mcp-2"));
+    expect(controller.snapshot().authorizing).toBe(false);
+  });
+});
 
 describe("McpController", () => {
   it("seeds list state and clears a selected server that disappears", () => {

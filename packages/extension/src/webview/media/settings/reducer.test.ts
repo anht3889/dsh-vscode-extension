@@ -21,7 +21,12 @@ const MCP: McpSettingsView = {
   section: "mcp",
   servers: [],
   secretStates: "unavailable",
-  oauth: { kind: "manual", reason: "no-callback-origin" },
+  oauth: {
+    kind: "manual",
+    reason: "no-callback-origin",
+    discovery: "unavailable",
+    authorization: "unavailable",
+  },
 };
 
 function receive(
@@ -67,7 +72,12 @@ describe("settingsReducer", () => {
             section: "mcp" as const,
             servers: [],
             secretStates: "unavailable" as const,
-            oauth: { kind: "manual" as const, reason: "no-callback-origin" as const },
+            oauth: {
+              kind: "manual" as const,
+              reason: "no-callback-origin" as const,
+              discovery: "unavailable" as const,
+              authorization: "unavailable" as const,
+            },
           },
           stale: false,
           available: true,

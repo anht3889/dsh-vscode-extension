@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useId,
   useReducer,
@@ -11,6 +12,7 @@ import {
   settingsText,
   type SettingsCopyKey,
 } from "../../localization/index.js";
+import { SettingsNestedDialog } from "../../SettingsNestedDialog.js";
 import type { SettingsLocale } from "../../types.js";
 import {
   McpController,
@@ -18,6 +20,13 @@ import {
 } from "./McpController.js";
 
 type SecretValues = Record<string, string>;
+
+/**
+ * Callback path offered for a new OAuth server. The owning plugin defaults to
+ * the same path and its catalog refuses one without a leading slash, so seeding
+ * it keeps a new record savable without the operator guessing the convention.
+ */
+const DEFAULT_REDIRECT_PATH = "/callback";
 
 const authOf = (kind: McpAuthWire["kind"]): McpAuthWire => {
   switch (kind) {
@@ -32,7 +41,7 @@ const authOf = (kind: McpAuthWire["kind"]): McpAuthWire => {
         authorizeUrl: "",
         tokenUrl: "",
         scopes: [],
-        redirectPath: "",
+        redirectPath: DEFAULT_REDIRECT_PATH,
       };
   }
 };
@@ -61,11 +70,17 @@ export function McpServerEditor({
   locale,
   draft: suppliedDraft,
   secretStates,
+  oauthDiscovery,
+  oauthAuthorization,
+  oauthOrigin,
 }: {
   controller: McpController;
   locale: SettingsLocale;
   draft: McpEditorDraft;
   secretStates: "available" | "unavailable";
+  oauthDiscovery: "available" | "unavailable";
+  oauthAuthorization: "available" | "unavailable";
+  oauthOrigin?: string;
 }): JSX.Element {
   const [, render] = useReducer((value: number) => value + 1, 0);
   const [secrets, setSecrets] = useState<SecretValues>({});
@@ -73,6 +88,11 @@ export function McpServerEditor({
   const previousEpoch = useRef(controller.snapshot().secretEpoch);
   const continuedEpochs = useRef(new Set<number>());
   const id = useId();
+  const nameRef = useRef<HTMLInputElement>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const closeEditor = useCallback((): void => {
+    controller.closeEditor();
+  }, [controller]);
 
   useEffect(() => controller.subscribe(() => render()), [controller]);
   useEffect(() => {
@@ -121,6 +141,14 @@ export function McpServerEditor({
   const busy = snapshot.pending.includes(owner);
   const awaitingSecrets = secretRequest !== undefined;
   const disabled = busy || awaitingSecrets || !snapshot.connected;
+  const canProvision = oauthAuthorization === "available" &&
+    oauthDiscovery === "available" &&
+    draft.transport === "streamable-http" &&
+    draft.auth.kind === "oauth";
+  const provisionReady = draft.serverName.trim() !== "" &&
+    draft.url.trim() !== "" &&
+    !disabled &&
+    !snapshot.authorizing;
 
   const hintId = (field: string): string => `${id}-${field}-hint`;
 
@@ -191,11 +219,13 @@ export function McpServerEditor({
     onChange: (value: string) => void,
     invalid = false,
     type?: "text" | "url",
+    inputRef?: React.RefObject<HTMLInputElement>,
   ): JSX.Element => (
     <div className="dsh-mcp-field-group">
       <label className="dsh-mcp-field">
         <span>{settingsText(locale, labelKey)}</span>
         <input
+          ref={inputRef}
           {...(type === undefined ? {} : { type })}
           value={value}
           disabled={disabled}
@@ -233,31 +263,35 @@ export function McpServerEditor({
     </div>
   );
 
+  const heading = settingsText(
+    locale,
+    draft.mode === "create" ? "mcpEditorCreate" : "mcpEditorEdit",
+  );
   return (
-    <form
-      className="dsh-mcp-editor"
-      role="form"
-      aria-label={settingsText(
-        locale,
-        draft.mode === "create" ? "mcpEditorCreate" : "mcpEditorEdit",
-      )}
-      onSubmit={(event) => {
-        event.preventDefault();
-        controller.saveEditor(secretsRef.current);
-      }}
+    <SettingsNestedDialog
+      labelledBy={`${id}-title`}
+      initialRef={nameRef}
+      saving={busy || awaitingSecrets}
+      onEscape={closeEditor}
     >
-      <h3>
-        {settingsText(
-          locale,
-          draft.mode === "create" ? "mcpEditorCreate" : "mcpEditorEdit",
-        )}
-      </h3>
+      <form
+        className="dsh-mcp-editor"
+        role="form"
+        aria-label={heading}
+        onSubmit={(event) => {
+          event.preventDefault();
+          controller.saveEditor(secretsRef.current);
+        }}
+      >
+      <h3 id={`${id}-title`}>{heading}</h3>
       {textField(
         "name",
         "mcpServerName",
         draft.serverName,
         (value) => controller.setEditorField("serverName", value),
         nameInvalid,
+        undefined,
+        nameRef,
       )}
       <label className="dsh-mcp-check">
         <input
@@ -297,42 +331,21 @@ export function McpServerEditor({
             (value) => controller.setEditorField("command", value),
             commandInvalid,
           )}
-          <fieldset className="dsh-mcp-repeat" disabled={disabled}>
-            <legend>{settingsText(locale, "mcpArguments")}</legend>
-            {draft.args.map((argument, index) => (
-              <div key={index}>
-                <input
-                  aria-label={`${settingsText(locale, "mcpArguments")} ${index + 1}`}
-                  value={argument}
-                  onChange={(event) => {
-                    const args = [...draft.args];
-                    args[index] = event.currentTarget.value;
-                    controller.setEditorField("args", args);
-                  }}
-                />
-                <button
-                  type="button"
-                  aria-label={formatSettingsText(locale, "mcpRemoveArgument", {
-                    index: index + 1,
-                  })}
-                  onClick={() =>
-                    controller.setEditorField(
-                      "args",
-                      draft.args.filter((_, current) => current !== index),
-                    )}
-                >
-                  {settingsText(locale, "delete")}
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() => controller.setEditorField("args", [...draft.args, ""])}
-            >
-              {settingsText(locale, "mcpAddArgument")}
-            </button>
-          </fieldset>
-          <fieldset className="dsh-mcp-repeat" disabled={disabled}>
+          <label className="dsh-mcp-field">
+            <span>{settingsText(locale, "mcpArguments")}</span>
+            <textarea
+              value={draft.args.join("\n")}
+              disabled={disabled}
+              rows={3}
+              onChange={(event) => controller.setEditorField(
+                "args",
+                event.currentTarget.value.split("\n"),
+              )}
+            />
+          </label>
+          {advancedOpen ? (
+            <>
+            <fieldset className="dsh-mcp-repeat" disabled={disabled}>
             <legend>{settingsText(locale, "mcpEnvironment")}</legend>
             {draft.env.map((entry, index) => (
               <div key={index}>
@@ -395,6 +408,8 @@ export function McpServerEditor({
             draft.cwd,
             (value) => controller.setEditorField("cwd", value),
           )}
+            </>
+          ) : null}
         </>
       ) : (
         textField(
@@ -484,6 +499,45 @@ export function McpServerEditor({
 
       {draft.auth.kind === "oauth" ? (
         <div className="dsh-mcp-oauth-fields">
+          {draft.transport !== "streamable-http" ? null : (
+            <div className="dsh-mcp-discover">
+              <p className="dsh-settings-hint">
+                {settingsText(
+                  locale,
+                  oauthDiscovery === "available"
+                    ? "mcpDiscoverOAuthHint"
+                    : "mcpDiscoverUnavailable",
+                )}
+              </p>
+              {oauthDiscovery === "unavailable" ? null : (
+                <button
+                  type="button"
+                  disabled={disabled || snapshot.discovering}
+                  onClick={() => controller.discoverOAuth()}
+                >
+                  {settingsText(
+                    locale,
+                    snapshot.discovering
+                      ? "mcpDiscoveringOAuth"
+                      : "mcpDiscoverOAuth",
+                  )}
+                </button>
+              )}
+              {snapshot.discoveryErrorKey === undefined ? null : (
+                <p className="dsh-settings-error" role="alert">
+                  {settingsText(locale, snapshot.discoveryErrorKey)}
+                  {snapshot.discoveryErrorDetail === undefined
+                    ? ""
+                    : `: ${snapshot.discoveryErrorDetail}`}
+                </p>
+              )}
+              {snapshot.discoveryNoticeKey === undefined ? null : (
+                <p role="status">
+                  {settingsText(locale, snapshot.discoveryNoticeKey)}
+                </p>
+              )}
+            </div>
+          )}
           {([
             ["clientId", "mcpClientId", "text"],
             ["authorizeUrl", "mcpAuthorizeUrl", "url"],
@@ -531,7 +585,11 @@ export function McpServerEditor({
                 setSecret("OAUTH_CLIENT_SECRET", event.currentTarget.value)}
             />
           </label>
-          <p className="dsh-mcp-oauth-note">{settingsText(locale, "mcpOAuthNote")}</p>
+          {oauthAuthorization === "unavailable" ? (
+            <p className="dsh-mcp-oauth-note">
+              {settingsText(locale, "mcpOAuthNote")}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {draft.auth.kind === "none" ? null : (
@@ -543,16 +601,32 @@ export function McpServerEditor({
         </p>
       )}
 
-      {numberField(
-        "timeout",
-        "mcpToolTimeout",
-        draft.toolCallTimeoutMs,
-        (value) => controller.setEditorField("toolCallTimeoutMs", value),
-        1,
-        timeoutInvalid,
-        "mcpFieldPositive",
-      )}
-      <fieldset className="dsh-mcp-reconnect" disabled={disabled}>
+      <button
+        className="dsh-mcp-disclosure"
+        type="button"
+        aria-expanded={advancedOpen}
+        onClick={() => setAdvancedOpen((open) => !open)}
+      >
+        {settingsText(locale, "mcpAdvanced")}
+      </button>
+      {!advancedOpen ? null : (
+        <div className="dsh-mcp-advanced">
+          {draft.auth.kind !== "oauth" || oauthOrigin === undefined ? null : (
+            <p className="dsh-settings-hint">
+              {settingsText(locale, "mcpOAuthLoopbackHint")}{" "}
+              <code>{oauthOrigin}{draft.auth.redirectPath}</code>
+            </p>
+          )}
+          {numberField(
+            "timeout",
+            "mcpToolTimeout",
+            draft.toolCallTimeoutMs,
+            (value) => controller.setEditorField("toolCallTimeoutMs", value),
+            1,
+            timeoutInvalid,
+            "mcpFieldPositive",
+          )}
+          <fieldset className="dsh-mcp-reconnect" disabled={disabled}>
         <legend>{settingsText(locale, "mcpReconnectEnabled")}</legend>
         <label className="dsh-mcp-check">
           <input
@@ -601,7 +675,9 @@ export function McpServerEditor({
           negative(draft.reconnect.maxAttempts),
           "mcpFieldNonNegative",
         )}
-      </fieldset>
+          </fieldset>
+        </div>
+      )}
 
       {draft.errorKey === undefined ? null : (
         <p className="dsh-settings-error" role="alert">
@@ -638,6 +714,22 @@ export function McpServerEditor({
         </div>
       ) : null}
       <div className="dsh-settings-actions">
+        {!canProvision ? null : (
+          <button
+            type="button"
+            disabled={!provisionReady}
+            onClick={() => controller.provisionOAuth()}
+          >
+            {settingsText(
+              locale,
+              snapshot.authorizing
+                ? busy
+                  ? "mcpAuthorizing"
+                  : "mcpWaitingAuthorization"
+                : "mcpAddAndAuthorize",
+            )}
+          </button>
+        )}
         {draft.secretFailure === undefined ? (
           <button type="submit" disabled={disabled || !valid}>
             {settingsText(locale, "save")}
@@ -654,11 +746,12 @@ export function McpServerEditor({
         <button
           type="button"
           disabled={busy}
-          onClick={() => controller.closeEditor()}
+          onClick={closeEditor}
         >
           {settingsText(locale, "cancel")}
         </button>
       </div>
     </form>
+    </SettingsNestedDialog>
   );
 }

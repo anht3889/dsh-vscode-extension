@@ -48,9 +48,18 @@ const detail: McpServerDetailWire = {
   },
 };
 
-function setup(locale: "en" | "zh" = "en", selected = detail) {
+function setup(
+  locale: "en" | "zh" = "en",
+  selected = detail,
+  authorization: "available" | "unavailable" = "unavailable",
+) {
   let next = 0;
-  const controller = new McpController(vi.fn(), vi.fn(), () => `request-${++next}`);
+  const sent: unknown[] = [];
+  const controller = new McpController(
+    (command) => sent.push(structuredClone(command)),
+    vi.fn(),
+    () => `request-${++next}`,
+  );
   controller.updateView({
     section: "mcp",
     servers: [{
@@ -60,7 +69,19 @@ function setup(locale: "en" | "zh" = "en", selected = detail) {
       disabledToolCount: selected.tools.filter((tool) => !tool.enabled).length,
     }],
     secretStates: selected.secrets.kind === "unknown" ? "unavailable" : "available",
-    oauth: { kind: "manual", reason: "no-callback-origin" },
+    oauth: authorization === "available"
+      ? {
+          kind: "loopback",
+          origin: "http://127.0.0.1:54321",
+          discovery: "available",
+          authorization,
+        }
+      : {
+          kind: "manual",
+          reason: "no-callback-origin",
+          discovery: "available",
+          authorization,
+        },
   });
   controller.select(selected.server.id);
   controller.receiveDetail({
@@ -75,24 +96,36 @@ function setup(locale: "en" | "zh" = "en", selected = detail) {
       snapshot={controller.snapshot()}
     />,
   );
-  return { controller, mounted };
+  return { controller, mounted, sent };
 }
 
 describe.each([
   ["en", "Clear OAuth tokens", "Cancel", "Clear OAuth tokens?"],
   ["zh", "清除 OAuth 令牌", "取消", "清除 OAuth 令牌？"],
 ] as const)("McpServerDetail locale %s", (locale, clear, cancel, title) => {
-  it("renders tools, configured secrets, and the DSH Web OAuth note", () => {
-    setup(locale);
-    expect(screen.getByRole("region", { name: "OAuth Server" }))
-      .toHaveAttribute("aria-labelledby", "mcp-server-oauth");
-    expect(screen.getByRole("checkbox", { name: "search" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "fetch" })).not.toBeChecked();
+  it("renders plugin-style dialog actions and reveals logs on demand", () => {
+    const { controller } = setup(locale);
+    const dialog = screen.getByRole("dialog", { name: "OAuth Server" });
+    expect(dialog).toBeVisible();
+    expect(screen.getByRole("switch", { name: "search" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("switch", { name: "fetch" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     expect(screen.getByText("OAUTH_CLIENT_SECRET").parentElement).toHaveTextContent(
       locale === "en" ? "Configured" : "已配置",
     );
     expect(screen.getByText(/DSH Web/)).toBeVisible();
     expect(screen.queryByRole("button", { name: /Authorize|授权|Discover|发现/ })).toBeNull();
+    expect(screen.queryByText(/No log entries|暂无日志条目/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Logs|日志/ }));
+    expect(screen.getByText(/No log entries|暂无日志条目/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /Done|完成/ }));
+    expect(controller.snapshot().selectedServerId).toBeUndefined();
   });
 
   it("traps, dismisses, and restores focus for OAuth confirmation", () => {
@@ -112,6 +145,25 @@ it("renders unavailable secret reporting as degraded copy", () => {
   expect(screen.getByText(/cannot report configured secret state/i)).toBeVisible();
 });
 
+it("offers Authorize for loopback OAuth and omits the DSH Web note", () => {
+  const { controller, sent } = setup("en", detail, "available");
+
+  expect(screen.queryByText(/DSH Web/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Authorize" }));
+  expect(sent.at(-1)).toMatchObject({
+    kind: "runMcpOperation",
+    operation: { kind: "startOAuth", serverId: "oauth" },
+  });
+  expect(controller.snapshot().authorizing).toBe(true);
+});
+
+it("keeps the DSH Web note and hides Authorize for manual OAuth", () => {
+  setup();
+
+  expect(screen.getByText(/DSH Web/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Authorize" })).toBeNull();
+});
+
 it("preserves the destructive button focus across controller refreshes", () => {
   const { controller } = setup();
   fireEvent.click(screen.getByRole("button", { name: "Clear OAuth tokens" }));
@@ -128,7 +180,12 @@ it("preserves the destructive button focus across controller refreshes", () => {
       disabledToolCount: 1,
     }],
     secretStates: "available",
-    oauth: { kind: "manual", reason: "no-callback-origin" },
+    oauth: {
+      kind: "manual",
+      reason: "no-callback-origin",
+      discovery: "available",
+      authorization: "unavailable",
+    },
   }));
   expect(destructive).toHaveFocus();
 });

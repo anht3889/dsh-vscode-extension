@@ -44,7 +44,12 @@ const catalog = (items: McpServerListItemWire[]) => ({
   section: "mcp" as const,
   servers: items,
   secretStates: "available" as const,
-  oauth: { kind: "manual" as const, reason: "no-callback-origin" as const },
+  oauth: {
+    kind: "manual" as const,
+    reason: "no-callback-origin" as const,
+    discovery: "available" as const,
+    authorization: "unavailable" as const,
+  },
 });
 
 function setup(locale: "en" | "zh" = "en", items = rows) {
@@ -62,10 +67,10 @@ function setup(locale: "en" | "zh" = "en", items = rows) {
 }
 
 describe.each([
-  ["en", "Add server", "Connect Server off", "Edit Server connected", "Delete Server off", "Cancel"],
-  ["zh", "添加服务器", "连接 Server off", "编辑 Server connected", "删除 Server off", "取消"],
-] as const)("McpServerList locale %s", (locale, add, connect, edit, remove, cancel) => {
-  it("renders every status and named action with selection semantics", () => {
+  ["en", "Add server", "Enabled"],
+  ["zh", "添加服务器", "已启用"],
+] as const)("McpServerList locale %s", (locale, add, enabled) => {
+  it("renders plugin-style summary cards with one immediate enable switch", () => {
     const controller = setup(locale);
     expect(screen.getAllByRole("listitem")).toHaveLength(5);
     expect(screen.getByText(/attempt 2|第 2 次/)).toBeVisible();
@@ -74,11 +79,18 @@ describe.each([
     expect(screen.getByText(/plugin failure/)).toBeVisible();
     expect(screen.getByRole("listitem", { name: "Server connected" }))
       .toHaveAttribute("aria-current", "true");
-    expect(screen.getByRole("button", { name: connect })).toBeEnabled();
-    expect(screen.getByRole("button", { name: edit })).toBeEnabled();
+    const row = screen.getByRole("listitem", { name: "Server off" });
+    expect(within(row).getByRole("switch", { name: enabled })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(within(row).queryByRole("button", { name: /Connect|Edit|Delete|连接|编辑|删除/ }))
+      .toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: edit }));
-    expect(controller.snapshot().editor?.serverId).toBe("connected");
+    fireEvent.click(within(row).getByRole("button", {
+      name: /Server off.*Standard input\/output|Server off.*标准输入\/输出/,
+    }));
+    expect(controller.snapshot().selectedServerId).toBe("off");
   });
 
   it("shows an actionable empty state", () => {
@@ -87,75 +99,14 @@ describe.each([
     expect(within(empty).getByRole("button", { name: add })).toBeEnabled();
   });
 
-  it("disables the editor slot during save while other server actions remain usable", () => {
+  it("disables Add and row switches during a save", () => {
     const controller = setup(locale);
     act(() => {
       controller.openEdit("connected");
       controller.saveEditor();
     });
     expect(screen.getByRole("button", { name: add })).toBeDisabled();
-    expect(screen.getByRole("button", { name: edit })).toBeDisabled();
-    expect(screen.getByRole("button", { name: connect })).toBeEnabled();
+    expect(screen.getAllByRole("switch").every((control) =>
+      control.hasAttribute("disabled"))).toBe(true);
   });
-
-  it("focuses Cancel and restores the delete control after Escape", () => {
-    setup(locale);
-    const invoking = screen.getByRole("button", { name: remove });
-    fireEvent.click(invoking);
-    expect(screen.getByRole("button", { name: cancel })).toHaveFocus();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(invoking).toHaveFocus();
-  });
-});
-
-it("preserves destructive-button focus across controller refreshes", () => {
-  const controller = setup();
-  fireEvent.click(screen.getByRole("button", { name: "Delete Server off" }));
-  const destructive = screen.getByRole("button", { name: "Delete" });
-  destructive.focus();
-  act(() => controller.updateView(catalog(rows)));
-  expect(destructive).toHaveFocus();
-});
-
-it("refuses a busy delete and restores the nearest surviving list context", () => {
-  const controller = setup();
-  const invoking = screen.getByRole("button", { name: "Delete Server off" });
-  const add = screen.getByRole("button", { name: "Add server" });
-  fireEvent.click(invoking);
-  act(() => controller.connectServer("off"));
-  const destructive = screen.getByRole("button", { name: "Delete" });
-  expect(destructive).toBeDisabled();
-  fireEvent.keyDown(document, { key: "Escape" });
-  expect(screen.getByRole("alertdialog")).toBeVisible();
-
-  act(() => controller.receiveOperation({
-    kind: "mcpOperation",
-    requestId: "request",
-    result: {
-      ok: false,
-      error: { code: "mcp-rejected", message: "connect refused" },
-    },
-  }));
-  expect(destructive).toBeEnabled();
-  fireEvent.click(destructive);
-  expect(screen.queryByRole("alertdialog")).toBeNull();
-  expect(add).toHaveFocus();
-  act(() => controller.receiveOperation({
-    kind: "mcpOperation",
-    requestId: "request",
-    result: { ok: true },
-  }));
-  expect(invoking).not.toBeInTheDocument();
-  expect(add).toHaveFocus();
-});
-
-it("keeps the confirmation open when the controller refuses execution", () => {
-  const controller = setup();
-  fireEvent.click(screen.getByRole("button", { name: "Delete Server off" }));
-  vi.spyOn(controller, "runConfirmed").mockReturnValue(false);
-  const destructive = screen.getByRole("button", { name: "Delete" });
-  fireEvent.click(destructive);
-  expect(screen.getByRole("alertdialog")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
 });
