@@ -309,16 +309,24 @@ describe("reduce", () => {
     );
     expect(running.timeline).toEqual([
       { kind: "assistant", seq: 1, text: "unfinished", streaming: false },
-      { kind: "user", seq: 1, text: "/goal write tests" },
+      {
+        kind: "command",
+        commandId: "cmd-1",
+        seq: 1,
+        name: "goal",
+        args: " write tests",
+        status: "running",
+      },
     ]);
     const done = reduce(
       running,
       eventMsg("command/done", {
         commandId: "cmd-1",
         kind: "success",
+        text: "ok",
       }),
     );
-    expect(done.timeline).toBe(running.timeline);
+    expect(done.timeline.at(-1)).toMatchObject({ status: "success", output: "ok" });
     expect(done.status).toBe("idle");
   });
 
@@ -339,8 +347,56 @@ describe("reduce", () => {
       ],
     });
     expect(resumed.timeline).toEqual([
-      { kind: "user", seq: 1, text: "/compact" },
+      {
+        kind: "command",
+        commandId: "cmd-1",
+        seq: 1,
+        name: "compact",
+        args: null,
+        status: "success",
+      },
     ]);
+  });
+
+  it("appends command/done without a matching run", () => {
+    const s = reduce(
+      initialState,
+      eventMsg("command/done", { commandId: "x", kind: "error", text: "nope" }),
+    );
+    expect(s.timeline[0]).toMatchObject({
+      kind: "command",
+      commandId: "x",
+      name: "",
+      status: "error",
+      output: "nope",
+    });
+  });
+
+  it("folds command events identically for live events and history", () => {
+    const events = [
+      eventMsg("command/run", {
+        commandId: "cmd-1",
+        name: "goal",
+        args: " write tests",
+        source: { kind: "user" },
+      }).event,
+      eventMsg("command/done", {
+        commandId: "cmd-1",
+        kind: "success",
+        text: "ok",
+      }).event,
+    ];
+    const live = events.reduce(
+      (state, event) =>
+        reduce(state, { kind: "event", sessionId: "s1", event }),
+      initialState,
+    );
+    const replayed = reduce(initialState, {
+      kind: "history",
+      sessionId: "s1",
+      events,
+    });
+    expect(replayed.timeline).toEqual(live.timeline);
   });
 
   it("sets approval from an ask message", () => {
@@ -1726,7 +1782,14 @@ describe("reduce", () => {
       }),
     );
     expect(accepted.timeline).toEqual([
-      { kind: "user", seq: 1, text: "/feedback" },
+      {
+        kind: "command",
+        commandId: "cmd-feedback",
+        seq: 1,
+        name: "feedback",
+        args: null,
+        status: "running",
+      },
     ]);
     expect(accepted.draft).toBe("");
     expect(accepted.chips).toEqual([]);

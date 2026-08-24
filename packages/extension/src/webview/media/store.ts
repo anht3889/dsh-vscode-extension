@@ -123,6 +123,7 @@ export type TimelineRow =
     };
 
 type ToolTimelineRow = Extract<TimelineRow, { kind: "tool" }>;
+type CommandTimelineRow = Extract<TimelineRow, { kind: "command" }>;
 
 export interface UiState {
   /** The conversation timeline folded from session events. */
@@ -369,14 +370,6 @@ function sameChips(left: DraftChip[], right: DraftChip[]): boolean {
   );
 }
 
-function commandRunLine(event: SessionEventWire): string | undefined {
-  if (event.type !== "command/run") return undefined;
-  const name = event.data.name;
-  if (typeof name !== "string" || name === "") return undefined;
-  const args = event.data.args;
-  return `/${name}${typeof args === "string" ? args : ""}`;
-}
-
 function commandRunName(event: SessionEventWire): string | undefined {
   if (event.type !== "command/run") return undefined;
   const name = event.data.name;
@@ -497,6 +490,38 @@ function updateTool(
   ];
 }
 
+function upsertCommand(
+  rows: TimelineRow[],
+  commandId: string,
+  seq: number,
+  update: (row: CommandTimelineRow) => CommandTimelineRow,
+): TimelineRow[] {
+  const index = lastRowIndex(
+    rows,
+    (row) => row.kind === "command" && row.commandId === commandId,
+  );
+  if (index >= 0) {
+    const row = rows[index]!;
+    if (row.kind !== "command") return rows;
+    return [
+      ...rows.slice(0, index),
+      update(row),
+      ...rows.slice(index + 1),
+    ];
+  }
+  return [
+    ...rows,
+    update({
+      kind: "command",
+      seq,
+      commandId,
+      name: "",
+      args: null,
+      status: "running",
+    }),
+  ];
+}
+
 function toolError(value: unknown): ToolTimelineRow["error"] {
   const source = record(value);
   if (source === undefined) return undefined;
@@ -593,12 +618,33 @@ export function foldEvent(
     }
 
     case "command/run": {
-      const line = commandRunLine(event);
-      if (line === undefined) return rows;
-      return [
-        ...closeAssistantStreaming(rows),
-        { kind: "user", seq: event.seq, text: line },
-      ];
+      const { commandId, name, args } = event.data;
+      if (typeof commandId !== "string") return rows;
+      const commandName = typeof name === "string" ? name : "";
+      const commandArgs = typeof args === "string" ? args : null;
+      return upsertCommand(
+        closeAssistantStreaming(rows),
+        commandId,
+        event.seq,
+        (row) => ({
+          ...row,
+          name: commandName,
+          args: commandArgs,
+          status: "running",
+        }),
+      );
+    }
+
+    case "command/done": {
+      const { commandId, kind, text } = event.data;
+      if (typeof commandId !== "string") return rows;
+      const status = kind === "error" ? "error" : "success";
+      const output = typeof text === "string" ? text : undefined;
+      return upsertCommand(rows, commandId, event.seq, (row) => ({
+        ...row,
+        status,
+        ...(output === undefined ? {} : { output }),
+      }));
     }
 
     case "assistant/chunk": {
@@ -1503,9 +1549,16 @@ export function reduce(state: UiState, msg: UiMessage): UiState {
         return timeline === state.timeline ? state : { ...state, timeline };
       }
       if (type === "command/done") {
+        const timeline = foldEvent(state.timeline, msg.event);
         const settled = settlePendingCommand(state);
-        if (state.status === "idle" && settled === undefined) return state;
-        return { ...state, status: "idle", ...settled };
+        if (
+          timeline === state.timeline &&
+          state.status === "idle" &&
+          settled === undefined
+        ) {
+          return state;
+        }
+        return { ...state, timeline, status: "idle", ...settled };
       }
       return state;
     }
