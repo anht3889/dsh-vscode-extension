@@ -7,7 +7,8 @@ import type {
   CredentialStateWire,
   PluginsSettingsView,
 } from "@dsh-vscode/contract";
-import { projectNamespace } from "./project.js";
+import { probeWebSearchService } from "./optional-services.js";
+import { assertBounded, projectNamespace } from "./project.js";
 import { projectSchemaFields } from "./schema.js";
 
 /**
@@ -62,28 +63,6 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function assertBounded(value: unknown): void {
-  let nodes = 0;
-  const seen = new WeakSet<object>();
-  const visit = (candidate: unknown, depth: number): void => {
-    nodes += 1;
-    if (nodes > MAX_VIEW_NODES || depth > MAX_VIEW_DEPTH) {
-      throw new Error("Plugins settings view exceeds bridge projection limits");
-    }
-    if (typeof candidate !== "object" || candidate === null) return;
-    if (seen.has(candidate)) {
-      throw new Error("Plugins settings view contains a cycle");
-    }
-    seen.add(candidate);
-    for (const child of Array.isArray(candidate)
-      ? candidate
-      : Object.values(candidate)) {
-      visit(child, depth + 1);
-    }
-  };
-  visit(value, 0);
-}
-
 async function webSearchCredential(
   ctx: Context,
   descriptor: SettingsDescriptor,
@@ -131,7 +110,12 @@ export async function buildPluginsView(ctx: Context): Promise<PluginsSettingsVie
   const descriptorByNamespace = new Map(
     descriptors.map((descriptor) => [String(descriptor.ns), descriptor]),
   );
+  // Suppression follows the same structural probe as the capability nav row.
+  const suppressCoreWebSearch = probeWebSearchService(ctx).state === "ready";
   const mounted = CARDS.flatMap((card) => {
+    if (card.namespace === "web-search-deepseek" && suppressCoreWebSearch) {
+      return [];
+    }
     const descriptor = descriptorByNamespace.get(card.namespace);
     return descriptor === undefined ? [] : [{ card, descriptor }];
   });
@@ -166,6 +150,6 @@ export async function buildPluginsView(ctx: Context): Promise<PluginsSettingsVie
     configurable,
     inventory,
   };
-  assertBounded(view);
+  assertBounded(view, MAX_VIEW_NODES, MAX_VIEW_DEPTH, "Plugins settings view");
   return view;
 }

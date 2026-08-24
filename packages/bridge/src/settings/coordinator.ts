@@ -8,6 +8,7 @@ import {
   type OutboundMessage,
   type SettingsErrorWire,
   type SettingsSectionId,
+  type SettingsSectionView,
 } from "@dsh-vscode/contract";
 import { buildGeneralView } from "./general.js";
 import { GENERAL_NAMESPACES } from "./general-namespaces.js";
@@ -15,12 +16,28 @@ import { buildModelsView } from "./models.js";
 import { resolveSettingsTarget } from "./paths.js";
 import { buildPluginsView } from "./plugins.js";
 import {
+  probeMcpService,
+  probeWebSearchService,
+} from "./optional-services.js";
+import {
   buildAgentPresetsView,
   copyAgentPreset,
   deleteAgentPreset,
   readAgentPreset,
 } from "./presets.js";
-import { projectNamespace, projectSettingsError } from "./project.js";
+import {
+  projectNamespace,
+  projectSettingsError,
+  truncatePluginMessage,
+} from "./project.js";
+import { createCapabilityWatcher } from "./capabilities.js";
+import {
+  buildMcpDetail,
+  buildMcpView,
+  readMcpLogs,
+  runMcpOperation as applyMcpOperation,
+} from "./mcp.js";
+import { applyWebSearchConfig, buildWebSearchView } from "./web-search.js";
 import type { SettingsCoordinator } from "./types.js";
 
 const PLUGIN_NAMESPACES = new Set([
@@ -65,6 +82,49 @@ function unavailableForNamespace(namespace: string): SettingsErrorWire {
   };
 }
 
+function sectionLabel(section: SettingsSectionId): string {
+  switch (section) {
+    case "general":
+      return "General";
+    case "models":
+      return "Models";
+    case "plugins":
+      return "Plugins";
+    case "agent-presets":
+      return "Agent Presets";
+    case "mcp":
+      return "MCP";
+    case "web-search":
+      return "Web Search";
+    default: {
+      const exhaustive: never = section;
+      return exhaustive;
+    }
+  }
+}
+
+function sectionServiceMissing(ctx: Context, section: SettingsSectionId): boolean {
+  switch (section) {
+    case "general":
+      return ctx.get("settings") === undefined;
+    case "models":
+      return ctx.get("settings") === undefined || ctx.get("llm") === undefined;
+    case "plugins":
+      return ctx.get("settings") === undefined ||
+        ctx.get("pluginInventory") === undefined;
+    case "agent-presets":
+      return ctx.get("agentPresets") === undefined;
+    case "mcp":
+      return probeMcpService(ctx).state !== "ready";
+    case "web-search":
+      return probeWebSearchService(ctx).state !== "ready";
+    default: {
+      const exhaustive: never = section;
+      return exhaustive;
+    }
+  }
+}
+
 function pathRequestKey(
   message: Parameters<SettingsCoordinator["resolvePath"]>[0],
 ): string {
@@ -79,13 +139,28 @@ export function createSettingsCoordinator(
 ): SettingsCoordinator {
   let generation = 0;
   let active = true;
+  const capabilityWatcher = createCapabilityWatcher(ctx);
+  let resubscribeMcp = (): void => {};
+  let resubscribeWebSearch = (): void => {};
+  const disposeCapabilityPush = capabilityWatcher.onChange((sections) => {
+    resubscribeMcp();
+    resubscribeWebSearch();
+    if (active) send({ kind: "settingsCapabilities", sections });
+  });
   const catalogRefreshAbort = new AbortController();
   const latest = new Map<string, number>();
   const sectionMutationCounts = new Map<SettingsSectionId, number>();
   const pendingInvalidations = new Map<
     SettingsSectionId,
     {
-      reason: "document" | "credentials" | "models" | "plugins" | "presets";
+      reason:
+        | "document"
+        | "credentials"
+        | "models"
+        | "plugins"
+        | "presets"
+        | "mcp"
+        | "web-search";
       refreshCatalog: boolean;
     }
   >();
@@ -113,7 +188,14 @@ export function createSettingsCoordinator(
 
   const sendInvalidation = (
     section: SettingsSectionId,
-    reason: "document" | "credentials" | "models" | "plugins" | "presets",
+    reason:
+      | "document"
+      | "credentials"
+      | "models"
+      | "plugins"
+      | "presets"
+      | "mcp"
+      | "web-search",
     refreshCatalog: boolean,
   ): void => {
     if (!active) return;
@@ -126,7 +208,14 @@ export function createSettingsCoordinator(
   };
   const invalidate = (
     section: SettingsSectionId,
-    reason: "document" | "credentials" | "models" | "plugins" | "presets",
+    reason:
+      | "document"
+      | "credentials"
+      | "models"
+      | "plugins"
+      | "presets"
+      | "mcp"
+      | "web-search",
     refreshCatalog = false,
   ): void => {
     if ((sectionMutationCounts.get(section) ?? 0) > 0) {
@@ -153,6 +242,47 @@ export function createSettingsCoordinator(
     pendingInvalidations.delete(section);
     sendInvalidation(section, pending.reason, pending.refreshCatalog);
   };
+  let disposeMcpListener = (): void => {};
+  resubscribeMcp = () => {
+    disposeMcpListener();
+    disposeMcpListener = () => {};
+    if (!active) return;
+    const probe = probeMcpService(ctx);
+    if (
+      probe.state !== "ready"
+      || probe.service.onCatalogChanged === undefined
+    ) {
+      return;
+    }
+    let listening = true;
+    const dispose = probe.service.onCatalogChanged(() => {
+      if (active && listening) invalidate("mcp", "mcp");
+    });
+    disposeMcpListener = () => {
+      if (!listening) return;
+      listening = false;
+      dispose();
+    };
+  };
+  let disposeWebSearchListener = (): void => {};
+  resubscribeWebSearch = () => {
+    disposeWebSearchListener();
+    disposeWebSearchListener = () => {};
+    if (!active) return;
+    const probe = probeWebSearchService(ctx);
+    if (probe.state !== "ready" || probe.service.onChanged === undefined) return;
+    let listening = true;
+    const dispose = probe.service.onChanged(() => {
+      if (active && listening) invalidate("web-search", "web-search");
+    });
+    disposeWebSearchListener = () => {
+      if (!listening) return;
+      listening = false;
+      dispose();
+    };
+  };
+  resubscribeMcp();
+  resubscribeWebSearch();
   const disposeDocumentListener = ctx.on(
     "settings/document-updated",
     (namespace: SettingsNamespace) => {
@@ -175,38 +305,172 @@ export function createSettingsCoordinator(
     invalidate("models", "models", true);
   });
 
+  const getCapabilities: SettingsCoordinator["getCapabilities"] = (requestId) => {
+    if (!active) return;
+    send({
+      kind: "settingsCapabilities",
+      requestId,
+      sections: capabilityWatcher.sections(),
+    });
+  };
+  const capabilities: SettingsCoordinator["capabilities"] = () =>
+    capabilityWatcher.sections();
+
   const getSection: SettingsCoordinator["getSection"] = (requestId, section) => {
     const key = `section:${section}`;
     const token = begin(key);
     void (async () => {
       try {
-        const view = section === "general"
-          ? await buildGeneralView(ctx)
-          : section === "models"
-          ? await buildModelsView(ctx)
-          : section === "plugins"
-          ? await buildPluginsView(ctx)
-          : await buildAgentPresetsView(ctx);
+        let view: SettingsSectionView;
+        switch (section) {
+          case "general":
+            view = await buildGeneralView(ctx);
+            break;
+          case "models":
+            view = await buildModelsView(ctx);
+            break;
+          case "plugins":
+            view = await buildPluginsView(ctx);
+            break;
+          case "agent-presets":
+            view = await buildAgentPresetsView(ctx);
+            break;
+          case "mcp":
+            view = await buildMcpView(ctx);
+            break;
+          case "web-search":
+            view = await buildWebSearchView(ctx);
+            break;
+          default: {
+            const exhaustive: never = section;
+            throw new TypeError(`unsupported settings section: ${exhaustive}`);
+          }
+        }
         sendCurrent(key, token, { kind: "settingsSection", requestId, view });
       } catch (error) {
-        const label = section === "agent-presets"
-          ? "Agent Presets"
-          : section[0]!.toUpperCase() + section.slice(1);
-        const requiredServiceMissing = section === "general"
-          ? ctx.get("settings") === undefined
-          : section === "models"
-          ? ctx.get("settings") === undefined || ctx.get("llm") === undefined
-          : section === "plugins"
-          ? ctx.get("settings") === undefined
-            || ctx.get("pluginInventory") === undefined
-          : ctx.get("agentPresets") === undefined;
+        const projectedError = projectSettingsError(error);
         sendCurrent(key, token, {
           kind: "settingsSection",
           requestId,
-          error: requiredServiceMissing
-            ? unavailable(label)
-            : projectSettingsError(error),
+          error: sectionServiceMissing(ctx, section)
+            ? unavailable(sectionLabel(section))
+            : section === "mcp"
+              ? {
+                  ...projectedError,
+                  message: truncatePluginMessage(projectedError.message),
+                }
+              : projectedError,
         });
+      }
+    })();
+  };
+
+  const getMcpServer: SettingsCoordinator["getMcpServer"] = (message) => {
+    const key = `mcp-detail:${message.serverId}`;
+    const token = begin(key);
+    void (async () => {
+      try {
+        const detail = await buildMcpDetail(ctx, message.serverId);
+        sendCurrent(key, token, {
+          kind: "mcpServer",
+          requestId: message.requestId,
+          result: { ok: true, detail },
+        });
+      } catch (error) {
+        const serviceMissing = probeMcpService(ctx).state !== "ready";
+        sendCurrent(key, token, {
+          kind: "mcpServer",
+          requestId: message.requestId,
+          result: {
+            ok: false,
+            error: serviceMissing
+              ? unavailable("MCP")
+              : {
+                  code: "mcp-rejected",
+                  message: truncatePluginMessage(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                },
+          },
+        });
+      }
+    })();
+  };
+
+  const getMcpLogs: SettingsCoordinator["getMcpLogs"] = (message) => {
+    const key = `mcp-logs:${message.serverId}`;
+    const token = begin(key);
+    void (async () => {
+      try {
+        const result = readMcpLogs(ctx, message.serverId, message.after);
+        sendCurrent(key, token, {
+          kind: "mcpLogs",
+          requestId: message.requestId,
+          result: { ok: true, ...result },
+        });
+      } catch (error) {
+        const serviceMissing = probeMcpService(ctx).state !== "ready";
+        sendCurrent(key, token, {
+          kind: "mcpLogs",
+          requestId: message.requestId,
+          result: {
+            ok: false,
+            error: serviceMissing
+              ? unavailable("MCP")
+              : {
+                  code: "mcp-rejected",
+                  message: truncatePluginMessage(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                },
+          },
+        });
+      }
+    })();
+  };
+
+  const runMcpOperation: SettingsCoordinator["runMcpOperation"] = (message) => {
+    const target = message.operation.kind === "upsertServer"
+      ? message.operation.server.serverId ?? "new"
+      : message.operation.serverId;
+    const key = `mcp-op:${target}`;
+    const token = begin(key);
+    beginSectionMutation("mcp");
+    void (async () => {
+      try {
+        if (probeMcpService(ctx).state !== "ready") {
+          sendCurrent(key, token, {
+            kind: "mcpOperation",
+            requestId: message.requestId,
+            result: { ok: false, error: unavailable("MCP") },
+          });
+          return;
+        }
+        const outcome = await applyMcpOperation(ctx, message.operation);
+        sendCurrent(key, token, {
+          kind: "mcpOperation",
+          requestId: message.requestId,
+          result: { ok: true, ...outcome },
+        });
+      } catch (error) {
+        const serviceMissing = probeMcpService(ctx).state !== "ready";
+        sendCurrent(key, token, {
+          kind: "mcpOperation",
+          requestId: message.requestId,
+          result: {
+            ok: false,
+            error: serviceMissing
+              ? unavailable("MCP")
+              : {
+                  code: "mcp-rejected",
+                  message: truncatePluginMessage(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                },
+          },
+        });
+      } finally {
+        finishSectionMutation("mcp");
       }
     })();
   };
@@ -338,6 +602,52 @@ export function createSettingsCoordinator(
   };
   const unsetCredential: SettingsCoordinator["unsetCredential"] = (message) => {
     mutateCredential(message);
+  };
+  const setWebSearchConfig: SettingsCoordinator["setWebSearchConfig"] = (
+    message,
+  ) => {
+    const key = "web-search-save";
+    const token = begin(key);
+    beginSectionMutation("web-search");
+    void (async () => {
+      try {
+        if (probeWebSearchService(ctx).state !== "ready") {
+          sendCurrent(key, token, {
+            kind: "webSearchMutation",
+            requestId: message.requestId,
+            result: {
+              ok: false,
+              error: unavailable("Web Search"),
+            },
+          });
+          return;
+        }
+        const outcome = await applyWebSearchConfig(
+          ctx,
+          message.catalog,
+          message.secrets,
+        );
+        sendCurrent(key, token, {
+          kind: "webSearchMutation",
+          requestId: message.requestId,
+          result: { ok: true, ...outcome },
+        });
+      } catch (error) {
+        sendCurrent(key, token, {
+          kind: "webSearchMutation",
+          requestId: message.requestId,
+          result: {
+            ok: false,
+            error: {
+              code: "web-search-rejected",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          },
+        });
+      } finally {
+        finishSectionMutation("web-search");
+      }
+    })();
   };
   const mutatePresetRoster = (
     key: string,
@@ -474,14 +784,24 @@ export function createSettingsCoordinator(
     generation += 1;
     latest.clear();
     pendingInvalidations.clear();
+    disposeMcpListener();
+    disposeWebSearchListener();
+    disposeCapabilityPush();
+    capabilityWatcher.dispose();
     disposeDocumentListener();
     disposeCredentialListener();
     disposeLlmListener();
   };
 
   return {
+    getCapabilities,
+    capabilities,
     getSection,
+    getMcpServer,
+    getMcpLogs,
+    runMcpOperation,
     mutate,
+    setWebSearchConfig,
     setCredential,
     unsetCredential,
     copyPreset,

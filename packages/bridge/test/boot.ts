@@ -80,6 +80,24 @@ class ProbeCredentialProvider extends CredentialProvider {
   }
 }
 
+/**
+ * Structural stand-in for an optional plugin service.
+ * @param members - required member names the probe checks for.
+ * @param omit - members to leave out so the probe reports `incomplete`.
+ * @returns a record whose present members are inert functions.
+ */
+export function optionalServiceStub(
+  members: readonly string[],
+  omit: readonly string[] = [],
+): Record<string, unknown> {
+  const skipped = new Set(omit);
+  return Object.fromEntries(
+    members
+      .filter((member) => !skipped.has(member))
+      .map((member) => [member, () => {}]),
+  );
+}
+
 export interface BootOptions {
   baseURL: string;
   provider: string;

@@ -7,6 +7,7 @@ import {
   MAX_INVENTORY_ENTRIES,
   MAX_VIEW_NODES,
 } from "./plugins.js";
+import { WEB_SEARCH_REQUIRED_MEMBERS } from "./optional-services.js";
 
 function inventoryEntries(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -60,6 +61,68 @@ function descriptor(
 }
 
 describe("buildPluginsView", () => {
+  it("suppresses the core Web Search card only for a complete external service", async () => {
+    const contextFor = (service?: object) => {
+      const ctx = new Context();
+      ctx.provide("settings", {
+        writable: true,
+        describe: () => [
+          descriptor("shell", { timeoutMs: 120_000, maxOutputBytes: 64_000 }),
+          descriptor("agent-loop", { maxParallelToolCalls: 4 }),
+          descriptor("web-search-deepseek", {
+            apiKeyEnv: "DEEPSEEK_API_KEY",
+            baseURL: "https://search.example/v1",
+            maxUses: 5,
+          }),
+        ],
+      } as never);
+      ctx.provide("credentials", {
+        describe: async () => ({
+          configured: false,
+          writable: true,
+        }),
+      } as never);
+      ctx.provide("pluginInventory", { list: () => ({ entries: [] }) } as never);
+      if (service !== undefined) {
+        ctx.provide("webSearchManager", service as never);
+      }
+      return ctx;
+    };
+    const completeService = Object.fromEntries(
+      WEB_SEARCH_REQUIRED_MEMBERS.map((member) => [member, () => (
+        member === "describeSecrets" ? Promise.resolve({}) : undefined
+      )]),
+    );
+
+    const complete = contextFor(completeService);
+    const completeView = await buildPluginsView(complete);
+    expect(completeView.configurable.map((card) => card.namespace)).toEqual([
+      "shell",
+      "agent-loop",
+    ]);
+    expect(completeView.namespaces.map((item) => item.namespace)).toEqual([
+      "shell",
+      "agent-loop",
+    ]);
+    await complete.fiber.dispose();
+
+    for (const service of [undefined, { getCatalog: () => ({}) }]) {
+      const fallback = contextFor(service);
+      const fallbackView = await buildPluginsView(fallback);
+      expect(fallbackView.configurable.map((card) => card.namespace)).toEqual([
+        "shell",
+        "agent-loop",
+        "web-search-deepseek",
+      ]);
+      expect(fallbackView.namespaces.map((item) => item.namespace)).toEqual([
+        "shell",
+        "agent-loop",
+        "web-search-deepseek",
+      ]);
+      await fallback.fiber.dispose();
+    }
+  });
+
   it("projects only mounted specialized cards with exact schema fields", async () => {
     const ctx = new Context();
     ctx.provide("settings", {

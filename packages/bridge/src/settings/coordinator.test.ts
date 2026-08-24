@@ -8,9 +8,17 @@ import {
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
 import {
   isSettingsOutboundMessage,
+  type McpOperationWire,
   type OutboundMessage,
 } from "@dsh-vscode/contract";
 import { createSettingsCoordinator } from "./coordinator.js";
+import {
+  MCP_REQUIRED_MEMBERS,
+  type McpManagementService,
+  type McpServerRecordLike,
+  type WebSearchCatalogLike,
+  type WebSearchManagementService,
+} from "./optional-services.js";
 
 const flush = async (): Promise<void> => {
   await new Promise((resolve) => setImmediate(resolve));
@@ -38,7 +46,131 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const mcpRecord = (id = "server-1"): McpServerRecordLike => ({
+  id,
+  serverName: id,
+  enabled: true,
+  transport: "stdio",
+  command: "node",
+  auth: { kind: "none" },
+  toolCallTimeoutMs: 30_000,
+  reconnect: {
+    enabled: true,
+    initialDelayMs: 100,
+    maxDelayMs: 1_000,
+    maxAttempts: 3,
+  },
+  createdAt: "created",
+  updatedAt: "updated",
+});
+
+const mcpService = (
+  overrides: Partial<McpManagementService> = {},
+): McpManagementService => {
+  const record = mcpRecord();
+  return {
+    list: () => [record],
+    get: (id) => id === record.id ? record : undefined,
+    upsert: async (candidate) => candidate,
+    remove: async () => {},
+    setEnabled: async () => {},
+    connect: async () => {},
+    disconnect: async () => {},
+    getStatus: () => ({ state: "disconnected" }),
+    getLogs: () => ({ next: 0, entries: [] }),
+    getTools: () => [],
+    setToolEnabled: async () => {},
+    clearOAuth: async () => {},
+    setSecrets: async () => {},
+    ...overrides,
+  };
+};
+
 describe("settings coordinator", () => {
+  it("returns a correlated capability snapshot", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getCapabilities("capabilities-1");
+
+    expect(messages).toEqual([{
+      kind: "settingsCapabilities",
+      requestId: "capabilities-1",
+      sections: [],
+    }]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("pushes an unsolicited capability message when services change", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+    const service = Object.fromEntries(
+      MCP_REQUIRED_MEMBERS.map((member) => [member, () => {}]),
+    );
+
+    const disposeService = ctx.provide("mcp", service as never);
+
+    expect(messages).toEqual([{
+      kind: "settingsCapabilities",
+      sections: ["mcp"],
+    }]);
+    await disposeService();
+    expect(messages.at(-1)).toEqual({
+      kind: "settingsCapabilities",
+      sections: [],
+    });
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it.each([
+    ["mcp", "MCP"],
+    ["web-search", "Web Search"],
+  ] as const)(
+    "returns section-specific unavailable for deferred %s reads",
+    async (section, label) => {
+      const ctx = new Context();
+      ctx.provide("agentPresets", {
+        list: async () => [{
+          id: "standard",
+          trust: "system",
+          path: "/system/standard/cordis.yml",
+        }],
+      } as never);
+      const messages: OutboundMessage[] = [];
+      const coordinator = createSettingsCoordinator(
+        ctx,
+        (message) => messages.push(message),
+      );
+
+      coordinator.getSection(section, section);
+      await flush();
+
+      expect(messages).toEqual([{
+        kind: "settingsSection",
+        requestId: section,
+        error: {
+          code: "settings-unavailable",
+          message: `${label} settings are not available`,
+        },
+      }]);
+      expect(messages.every((message) => (
+        message.kind !== "settingsSection" || message.view === undefined
+      ))).toBe(true);
+      coordinator.dispose();
+      await ctx.fiber.dispose();
+    },
+  );
+
   it("sends only the latest section read", async () => {
     const ctx = new Context();
     const first = deferred<unknown[]>();
@@ -1532,6 +1664,958 @@ describe("settings coordinator", () => {
     coordinator.dispose();
 
     expect(refreshSignal?.aborted).toBe(true);
+    await ctx.fiber.dispose();
+  });
+
+  it("returns Web Search views only while its service is ready", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(ctx, (message) => messages.push(message));
+
+    coordinator.getSection("missing", "web-search");
+    await flush();
+    expect(messages.at(-1)).toEqual({
+      kind: "settingsSection",
+      requestId: "missing",
+      error: {
+        code: "settings-unavailable",
+        message: "Web Search settings are not available",
+      },
+    });
+
+    ctx.provide("webSearchManager", {
+      getCatalog: () => ({ engine: "tavily", engines: {} }),
+      putCatalog: async (catalog: WebSearchCatalogLike) => catalog,
+      describeSecrets: async () => ({
+        TAVILY_API_KEY: { configured: true },
+        BRAVE_API_KEY: { configured: false },
+      }),
+      putSecrets: async () => {},
+      available: () => true,
+    } as never);
+    coordinator.getSection("ready", "web-search");
+    await flush();
+
+    expect(messages.at(-1)).toEqual(expect.objectContaining({
+      kind: "settingsSection",
+      requestId: "ready",
+      view: expect.objectContaining({
+        section: "web-search",
+        engine: "tavily",
+        available: true,
+      }),
+    }));
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("routes the MCP section, detail, and incremental logs", async () => {
+    const ctx = new Context();
+    const getLogs = vi.fn(() => ({
+      next: 5,
+      entries: [{ at: "now", level: "info" as const, message: "ready" }],
+    }));
+    ctx.provide("mcp", mcpService({ getLogs }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getSection("list", "mcp");
+    coordinator.getMcpServer({
+      kind: "getMcpServer",
+      requestId: "detail",
+      serverId: "server-1",
+    });
+    coordinator.getMcpLogs({
+      kind: "getMcpLogs",
+      requestId: "logs",
+      serverId: "server-1",
+      after: 3,
+    });
+    await flush();
+
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "settingsSection",
+        requestId: "list",
+        view: expect.objectContaining({ section: "mcp" }),
+      }),
+      expect.objectContaining({
+        kind: "mcpServer",
+        requestId: "detail",
+        result: expect.objectContaining({ ok: true }),
+      }),
+      {
+        kind: "mcpLogs",
+        requestId: "logs",
+        result: {
+          ok: true,
+          serverId: "server-1",
+          next: 5,
+          entries: [{ at: "now", level: "info", message: "ready" }],
+        },
+      },
+    ]));
+    expect(getLogs).toHaveBeenCalledWith("server-1", 3);
+    expect(messages.every(isSettingsOutboundMessage)).toBe(true);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("returns settings-unavailable for every MCP read without a service", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getSection("list", "mcp");
+    coordinator.getMcpServer({
+      kind: "getMcpServer",
+      requestId: "detail",
+      serverId: "server-1",
+    });
+    coordinator.getMcpLogs({
+      kind: "getMcpLogs",
+      requestId: "logs",
+      serverId: "server-1",
+    });
+    await flush();
+
+    expect(messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "settingsSection",
+        requestId: "list",
+        error: expect.objectContaining({ code: "settings-unavailable" }),
+      }),
+      expect.objectContaining({
+        kind: "mcpServer",
+        requestId: "detail",
+        result: {
+          ok: false,
+          error: expect.objectContaining({ code: "settings-unavailable" }),
+        },
+      }),
+      expect.objectContaining({
+        kind: "mcpLogs",
+        requestId: "logs",
+        result: {
+          ok: false,
+          error: expect.objectContaining({ code: "settings-unavailable" }),
+        },
+      }),
+    ]));
+    expect(messages).toHaveLength(3);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("keeps MCP detail latest per server while independent servers proceed", async () => {
+    const ctx = new Context();
+    const first = deferred<Record<string, { configured: boolean }>>();
+    let firstCalls = 0;
+    ctx.provide("mcp", mcpService({
+      list: () => [mcpRecord("first"), mcpRecord("second")],
+      get: (id) => mcpRecord(id),
+      describeSecrets: (id) => {
+        if (id === "first" && firstCalls++ === 0) return first.promise;
+        return Promise.resolve({});
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+    const detail = (requestId: string, serverId: string) =>
+      coordinator.getMcpServer({
+        kind: "getMcpServer",
+        requestId,
+        serverId,
+      });
+
+    detail("first-old", "first");
+    detail("first-new", "first");
+    detail("second", "second");
+    await flush();
+
+    expect(messages.filter((message) => message.kind === "mcpServer")
+      .map((message) => message.requestId)).toEqual(["first-new", "second"]);
+    first.resolve({});
+    await flush();
+    expect(messages.filter((message) => message.kind === "mcpServer")
+      .map((message) => message.requestId)).toEqual(["first-new", "second"]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("suppresses an in-flight MCP detail after disposal", async () => {
+    const ctx = new Context();
+    const pending = deferred<Record<string, { configured: boolean }>>();
+    ctx.provide("mcp", mcpService({
+      describeSecrets: () => pending.promise,
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getMcpServer({
+      kind: "getMcpServer",
+      requestId: "disposed",
+      serverId: "server-1",
+    });
+    coordinator.dispose();
+    pending.resolve({});
+    await flush();
+
+    expect(messages).toEqual([]);
+    await ctx.fiber.dispose();
+  });
+
+  it("maps MCP projection failures to bounded mcp-rejected errors", async () => {
+    const ctx = new Context();
+    ctx.provide("mcp", mcpService({
+      getStatus: () => ({
+        state: "failed",
+        error: "x".repeat(513),
+        at: "now",
+      }),
+      getTools: () => [{ name: "bad", enabled: true }],
+      describeSecrets: async () => {
+        throw new Error("degraded");
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getMcpServer({
+      kind: "getMcpServer",
+      requestId: "detail",
+      serverId: "missing",
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpServer",
+      requestId: "detail",
+      result: {
+        ok: false,
+        error: {
+          code: "mcp-rejected",
+          message: expect.stringMatching(/^MCP server "missing"/),
+        },
+      },
+    }]);
+    expect((messages[0] as { result: { error: { message: string } } })
+      .result.error.message.length).toBeLessThanOrEqual(512);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("emits a valid MCP detail when failed status error text is empty", async () => {
+    const ctx = new Context();
+    ctx.provide("mcp", mcpService({
+      getStatus: () => ({ state: "failed", error: "", at: "now" }),
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getMcpServer({
+      kind: "getMcpServer",
+      requestId: "empty-failure",
+      serverId: "server-1",
+    });
+    await flush();
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toEqual(expect.objectContaining({
+      kind: "mcpServer",
+      requestId: "empty-failure",
+      result: {
+        ok: true,
+        detail: expect.objectContaining({
+          status: {
+            state: "failed",
+            error: "MCP connection failed",
+            at: "now",
+          },
+        }),
+      },
+    }));
+    expect(messages.every(isSettingsOutboundMessage)).toBe(true);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("bounds foreign MCP section failure text before wire", async () => {
+    const ctx = new Context();
+    ctx.provide("mcp", mcpService({
+      list: () => {
+        throw new Error("x".repeat(513));
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.getSection("mcp", "mcp");
+    await flush();
+
+    const response = messages[0];
+    expect(response).toEqual(expect.objectContaining({
+      kind: "settingsSection",
+      requestId: "mcp",
+      error: expect.objectContaining({ code: "settings-rejected" }),
+    }));
+    if (response?.kind !== "settingsSection" || response.error === undefined) {
+      throw new TypeError("expected MCP settings section error");
+    }
+    expect(response.error.message).toHaveLength(512);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("registers, replaces, and disposes MCP catalog listeners", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const listeners: (() => void)[] = [];
+    const disposers: ReturnType<typeof vi.fn>[] = [];
+    const service = (): McpManagementService => mcpService({
+      onCatalogChanged: (listener) => {
+        listeners.push(listener);
+        const dispose = vi.fn();
+        disposers.push(dispose);
+        return dispose;
+      },
+    });
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    const removeFirst = ctx.provide("mcp", service() as never);
+    expect(listeners).toHaveLength(1);
+    listeners[0]!();
+    expect(messages.at(-1)).toEqual({
+      kind: "settingsInvalidated",
+      sections: ["mcp"],
+      reason: "mcp",
+    });
+
+    await removeFirst();
+    expect(disposers[0]).toHaveBeenCalledOnce();
+    const beforeLateCall = messages.length;
+    listeners[0]!();
+    expect(messages).toHaveLength(beforeLateCall);
+
+    ctx.provide("mcp", service() as never);
+    expect(listeners).toHaveLength(2);
+    coordinator.dispose();
+    expect(disposers[1]).toHaveBeenCalledOnce();
+    listeners[1]!();
+    expect(messages).toHaveLength(beforeLateCall + 1);
+    await ctx.fiber.dispose();
+  });
+
+  it("returns settings-unavailable for an MCP operation without a service", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "missing",
+      operation: { kind: "connectServer", serverId: "server-1" },
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpOperation",
+      requestId: "missing",
+      result: {
+        ok: false,
+        error: {
+          code: "settings-unavailable",
+          message: "MCP settings are not available",
+        },
+      },
+    }]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("returns settings-unavailable for a structurally incomplete MCP service", async () => {
+    const ctx = new Context();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ctx.provide("mcp", { list: () => [] } as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "incomplete",
+      operation: { kind: "connectServer", serverId: "server-1" },
+    });
+    await flush();
+
+    expect(messages.at(-1)).toEqual({
+      kind: "mcpOperation",
+      requestId: "incomplete",
+      result: {
+        ok: false,
+        error: expect.objectContaining({ code: "settings-unavailable" }),
+      },
+    });
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+    warn.mockRestore();
+  });
+
+  it("keeps MCP operations latest per server while different servers proceed", async () => {
+    const ctx = new Context();
+    const first = deferred<void>();
+    let firstCalls = 0;
+    ctx.provide("mcp", mcpService({
+      list: () => [mcpRecord("first"), mcpRecord("second")],
+      get: (id) => mcpRecord(id),
+      connect: (id) => (
+        id === "first" && firstCalls++ === 0 ? first.promise : Promise.resolve()
+      ),
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+    const connect = (requestId: string, serverId: string) =>
+      coordinator.runMcpOperation({
+        kind: "runMcpOperation",
+        requestId,
+        operation: { kind: "connectServer", serverId },
+      });
+
+    connect("first-old", "first");
+    connect("first-new", "first");
+    connect("second", "second");
+    await flush();
+
+    expect(messages.filter((message) => message.kind === "mcpOperation")
+      .map((message) => message.requestId)).toEqual(["first-new", "second"]);
+    first.resolve(undefined);
+    await flush();
+    expect(messages.filter((message) => message.kind === "mcpOperation")
+      .map((message) => message.requestId)).toEqual(["first-new", "second"]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("uses one latest-request key for MCP creates", async () => {
+    const ctx = new Context();
+    const first = deferred<McpServerRecordLike>();
+    let calls = 0;
+    const records = new Map<string, McpServerRecordLike>();
+    ctx.provide("mcp", mcpService({
+      list: () => [...records.values()],
+      get: (id) => records.get(id),
+      upsert: async (record) => {
+        if (calls++ === 0) return first.promise;
+        records.set(record.id, record);
+        return record;
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+    const create = (requestId: string, serverName: string) =>
+      coordinator.runMcpOperation({
+        kind: "runMcpOperation",
+        requestId,
+        operation: {
+          kind: "upsertServer",
+          server: {
+            serverName,
+            enabled: true,
+            transport: "stdio",
+            command: "node",
+            auth: { kind: "none" },
+            toolCallTimeoutMs: 30_000,
+            reconnect: {
+              enabled: true,
+              initialDelayMs: 100,
+              maxDelayMs: 1_000,
+              maxAttempts: 3,
+            },
+          },
+        },
+      });
+
+    create("old", "Old");
+    create("new", "New");
+    await flush();
+    first.resolve(mcpRecord("old"));
+    await flush();
+
+    expect(messages.filter((message) => message.kind === "mcpOperation"))
+      .toEqual([expect.objectContaining({ requestId: "new" })]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("redacts MCP secret failures in the coordinator response", async () => {
+    const ctx = new Context();
+    const literal = "fixture-secret";
+    const pluginText = `plugin echoed ${literal}`;
+    const record = mcpRecord();
+    record.auth = { kind: "headers", headerNames: ["Authorization"] };
+    ctx.provide("mcp", mcpService({
+      get: () => record,
+      setSecrets: async () => {
+        throw new Error(pluginText);
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "secret",
+      operation: {
+        kind: "setServerSecrets",
+        serverId: record.id,
+        secrets: [{ name: "Authorization", value: literal }],
+      },
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "mcpOperation",
+      requestId: "secret",
+      result: {
+        ok: false,
+        error: {
+          code: "mcp-rejected",
+          message: expect.stringContaining("Authorization"),
+        },
+      },
+    }]);
+    expect(JSON.stringify(messages)).not.toContain(literal);
+    expect(JSON.stringify(messages)).not.toContain(pluginText);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it.each<{
+    label: string;
+    operation: McpOperationWire;
+    overrides: Partial<McpManagementService>;
+    expected: string;
+  }>([
+    {
+      label: "remove",
+      operation: { kind: "removeServer", serverId: "server-1" },
+      overrides: { remove: async () => { throw new Error(""); } },
+      expected: 'MCP server "server-1" could not be removed',
+    },
+    {
+      label: "set enabled",
+      operation: {
+        kind: "setServerEnabled",
+        serverId: "server-1",
+        enabled: false,
+      },
+      overrides: {
+        setEnabled: async () => {
+          throw { message: "", detail: "plugin echoed fixture-secret" };
+        },
+      },
+      expected: 'MCP server "server-1" could not be disabled',
+    },
+    {
+      label: "connect",
+      operation: { kind: "connectServer", serverId: "server-1" },
+      overrides: { connect: async () => { throw new Error(""); } },
+      expected: 'MCP server "server-1" could not connect',
+    },
+    {
+      label: "disconnect",
+      operation: { kind: "disconnectServer", serverId: "server-1" },
+      overrides: {
+        disconnect: async () => {
+          throw { message: "", detail: "plugin echoed fixture-secret" };
+        },
+      },
+      expected: 'MCP server "server-1" could not disconnect',
+    },
+    {
+      label: "tool toggle",
+      operation: {
+        kind: "setToolEnabled",
+        serverId: "server-1",
+        toolName: "known",
+        enabled: false,
+      },
+      overrides: {
+        getTools: () => [{ name: "known", enabled: true }],
+        setToolEnabled: async () => { throw new Error(""); },
+      },
+      expected: 'MCP tool "known" on server "server-1" could not be disabled',
+    },
+    {
+      label: "clear OAuth",
+      operation: { kind: "clearOAuthTokens", serverId: "server-1" },
+      overrides: {
+        clearOAuth: async () => {
+          throw { message: "", detail: "plugin echoed fixture-secret" };
+        },
+      },
+      expected: 'OAuth tokens for MCP server "server-1" could not be cleared',
+    },
+  ])(
+    "settles an empty $label rejection with a valid bounded MCP response",
+    async ({ operation, overrides, expected }) => {
+      const ctx = new Context();
+      ctx.provide("mcp", mcpService(overrides) as never);
+      const messages: OutboundMessage[] = [];
+      const coordinator = createSettingsCoordinator(
+        ctx,
+        (message) => messages.push(message),
+      );
+
+      coordinator.runMcpOperation({
+        kind: "runMcpOperation",
+        requestId: `empty-${operation.kind}`,
+        operation,
+      });
+      await flush();
+
+      expect(messages).toEqual([{
+        kind: "mcpOperation",
+        requestId: `empty-${operation.kind}`,
+        result: {
+          ok: false,
+          error: { code: "mcp-rejected", message: expected },
+        },
+      }]);
+      expect(messages.every(isSettingsOutboundMessage)).toBe(true);
+      expect(JSON.stringify(messages)).not.toContain("fixture-secret");
+      expect(JSON.stringify(messages)).not.toContain("plugin echoed");
+      expect(expected.length).toBeGreaterThan(0);
+      expect(expected.length).toBeLessThanOrEqual(512);
+      coordinator.dispose();
+      await ctx.fiber.dispose();
+    },
+  );
+
+  it("defers MCP catalog invalidation until an operation settles", async () => {
+    const ctx = new Context();
+    const pending = deferred<void>();
+    let listener: (() => void) | undefined;
+    ctx.provide("mcp", mcpService({
+      connect: () => pending.promise,
+      onCatalogChanged: (next) => {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+    }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "connect",
+      operation: { kind: "connectServer", serverId: "server-1" },
+    });
+    listener?.();
+    await flush();
+    expect(messages).toEqual([]);
+
+    pending.resolve(undefined);
+    await flush();
+    expect(messages.map((message) => message.kind)).toEqual([
+      "mcpOperation",
+      "settingsInvalidated",
+    ]);
+    expect(messages[1]).toEqual({
+      kind: "settingsInvalidated",
+      sections: ["mcp"],
+      reason: "mcp",
+    });
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("suppresses an in-flight MCP operation reply after disposal", async () => {
+    const ctx = new Context();
+    const pending = deferred<void>();
+    ctx.provide("mcp", mcpService({ connect: () => pending.promise }) as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(
+      ctx,
+      (message) => messages.push(message),
+    );
+
+    coordinator.runMcpOperation({
+      kind: "runMcpOperation",
+      requestId: "disposed",
+      operation: { kind: "connectServer", serverId: "server-1" },
+    });
+    coordinator.dispose();
+    pending.resolve(undefined);
+    await flush();
+
+    expect(messages).toEqual([]);
+    await ctx.fiber.dispose();
+  });
+
+  it.each([
+    [
+      {
+        engine: "unknown" as never,
+        engines: {},
+      },
+      'Web Search catalog engine "unknown" is not supported',
+    ],
+    [
+      {
+        engine: "searxng" as const,
+        engines: { searxng: { baseURL: "x".repeat(2_049) } },
+      },
+      "Web Search catalog engines.searxng.baseURL exceeds 2048 characters",
+    ],
+  ])(
+    "returns a valid explicit error for malformed Web Search catalog projection",
+    async (catalog, expectedMessage) => {
+      const ctx = new Context();
+      ctx.provide("webSearchManager", {
+        getCatalog: () => catalog,
+        putCatalog: async (candidate: WebSearchCatalogLike) => candidate,
+        describeSecrets: async () => ({}),
+        putSecrets: async () => {},
+        available: () => false,
+      } as never);
+      const messages: OutboundMessage[] = [];
+      const coordinator = createSettingsCoordinator(
+        ctx,
+        (message) => messages.push(message),
+      );
+
+      coordinator.getSection("malformed", "web-search");
+      await flush();
+
+      expect(messages.at(-1)).toEqual({
+        kind: "settingsSection",
+        requestId: "malformed",
+        error: {
+          code: "settings-rejected",
+          message: expectedMessage,
+        },
+      });
+      expect(messages.every(isSettingsOutboundMessage)).toBe(true);
+      coordinator.dispose();
+      await ctx.fiber.dispose();
+    },
+  );
+
+  it("keeps only the latest Web Search save result", async () => {
+    const ctx = new Context();
+    const first = deferred<WebSearchCatalogLike>();
+    let calls = 0;
+    let current: WebSearchCatalogLike = { engine: null, engines: {} };
+    ctx.provide("webSearchManager", {
+      getCatalog: () => current,
+      putCatalog: async (catalog: WebSearchCatalogLike) => {
+        if (calls++ === 0) return first.promise;
+        current = catalog;
+        return catalog;
+      },
+      describeSecrets: async () => ({
+        TAVILY_API_KEY: { configured: false },
+        BRAVE_API_KEY: { configured: false },
+      }),
+      putSecrets: async () => {},
+      available: () => true,
+    } as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(ctx, (message) => messages.push(message));
+    const save = (requestId: string, engine: "tavily" | "brave") =>
+      coordinator.setWebSearchConfig({
+        kind: "setWebSearchConfig",
+        requestId,
+        catalog: { engine, engines: [] },
+        secrets: [],
+      });
+
+    save("old", "tavily");
+    save("new", "brave");
+    await flush();
+    first.resolve({ engine: "tavily", engines: {} });
+    await flush();
+
+    expect(messages.filter((message) => message.kind === "webSearchMutation"))
+      .toEqual([expect.objectContaining({ requestId: "new" })]);
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("maps catalog rejection to web-search-rejected without calling secrets", async () => {
+    const ctx = new Context();
+    const putSecrets = vi.fn();
+    ctx.provide("webSearchManager", {
+      getCatalog: () => ({ engine: null, engines: {} }),
+      putCatalog: async () => {
+        throw new Error("invalid catalog");
+      },
+      describeSecrets: async () => ({}),
+      putSecrets,
+      available: () => false,
+    } as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(ctx, (message) => messages.push(message));
+
+    coordinator.setWebSearchConfig({
+      kind: "setWebSearchConfig",
+      requestId: "rejected",
+      catalog: { engine: null, engines: [] },
+      secrets: [{ ref: "TAVILY_API_KEY", value: "fixture-secret" }],
+    });
+    await flush();
+
+    expect(messages).toEqual([{
+      kind: "webSearchMutation",
+      requestId: "rejected",
+      result: {
+        ok: false,
+        error: {
+          code: "web-search-rejected",
+          message: "invalid catalog",
+        },
+      },
+    }]);
+    expect(putSecrets).not.toHaveBeenCalled();
+    expect(JSON.stringify(messages)).not.toContain("fixture-secret");
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("defers Web Search change invalidation until its save settles", async () => {
+    const ctx = new Context();
+    const pending = deferred<WebSearchCatalogLike>();
+    let listener: (() => void) | undefined;
+    const service: WebSearchManagementService = {
+      getCatalog: () => ({ engine: "tavily", engines: {} }),
+      putCatalog: () => pending.promise,
+      describeSecrets: async () => ({
+        TAVILY_API_KEY: { configured: false },
+        BRAVE_API_KEY: { configured: false },
+      }),
+      putSecrets: async () => {},
+      available: () => true,
+      onChanged: (next) => {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+    };
+    ctx.provide("webSearchManager", service as never);
+    const messages: OutboundMessage[] = [];
+    const coordinator = createSettingsCoordinator(ctx, (message) => messages.push(message));
+
+    coordinator.setWebSearchConfig({
+      kind: "setWebSearchConfig",
+      requestId: "save",
+      catalog: { engine: "tavily", engines: [] },
+      secrets: [],
+    });
+    listener?.();
+    await flush();
+    expect(messages).toEqual([]);
+
+    pending.resolve({ engine: "tavily", engines: {} });
+    await flush();
+    expect(messages.map((message) => message.kind)).toEqual([
+      "webSearchMutation",
+      "settingsInvalidated",
+    ]);
+    expect(messages[1]).toEqual({
+      kind: "settingsInvalidated",
+      sections: ["web-search"],
+      reason: "web-search",
+    });
+    coordinator.dispose();
+    await ctx.fiber.dispose();
+  });
+
+  it("registers, replaces, and disposes Web Search change listeners", async () => {
+    const ctx = new Context();
+    const messages: OutboundMessage[] = [];
+    const listeners: (() => void)[] = [];
+    const disposers: ReturnType<typeof vi.fn>[] = [];
+    const service = (): WebSearchManagementService => ({
+      getCatalog: () => ({ engine: null, engines: {} }),
+      putCatalog: async (catalog) => catalog,
+      describeSecrets: async () => ({}),
+      putSecrets: async () => {},
+      available: () => false,
+      onChanged: (listener) => {
+        listeners.push(listener);
+        const dispose = vi.fn();
+        disposers.push(dispose);
+        return dispose;
+      },
+    });
+    const coordinator = createSettingsCoordinator(ctx, (message) => messages.push(message));
+
+    const removeFirst = ctx.provide("webSearchManager", service() as never);
+    expect(listeners).toHaveLength(1);
+    listeners[0]!();
+    expect(messages.at(-1)).toEqual({
+      kind: "settingsInvalidated",
+      sections: ["web-search"],
+      reason: "web-search",
+    });
+
+    await removeFirst();
+    expect(disposers[0]).toHaveBeenCalledOnce();
+    const beforeLateCall = messages.length;
+    listeners[0]!();
+    expect(messages).toHaveLength(beforeLateCall);
+
+    ctx.provide("webSearchManager", service() as never);
+    expect(listeners).toHaveLength(2);
+    coordinator.dispose();
+    expect(disposers[1]).toHaveBeenCalledOnce();
+    listeners[1]!();
+    expect(messages).toHaveLength(beforeLateCall + 1);
     await ctx.fiber.dispose();
   });
 });

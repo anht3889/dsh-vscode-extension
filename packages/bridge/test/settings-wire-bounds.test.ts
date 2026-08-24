@@ -5,9 +5,39 @@ import {
 } from "@deepseek-ai/dsh-settings";
 import {
   isOutboundMessage,
+  MAX_MCP_ARGS,
+  MAX_MCP_DISABLED_TOOLS,
+  MAX_MCP_ENV_ENTRIES,
+  MAX_MCP_HEADER_NAMES,
+  MAX_MCP_LOG_DETAIL_LENGTH,
+  MAX_MCP_LOG_ENTRIES,
+  MAX_MCP_LOG_MESSAGE_LENGTH,
+  MAX_MCP_SCOPES,
+  MAX_MCP_SERVERS,
+  MAX_MCP_TOOLS,
+  MAX_SECRET_VALUE_LENGTH,
+  MAX_WIRE_IDENTIFIER_LENGTH,
+  MAX_WIRE_URL_LENGTH,
   SETTINGS_WIRE_SCAN_NODE_LIMIT,
 } from "@dsh-vscode/contract";
 import { describe, expect, it } from "vitest";
+import {
+  buildMcpDetail,
+  buildMcpView,
+  MAX_MCP_DETAIL_NODES,
+  MAX_MCP_LIST_VIEW_NODES,
+  MAX_MCP_LOGS_MESSAGE_NODES,
+  readMcpLogs,
+} from "../src/settings/mcp.js";
+import {
+  buildWebSearchView,
+  MAX_WEB_SEARCH_VIEW_NODES,
+} from "../src/settings/web-search.js";
+import type {
+  McpLogEntryLike,
+  McpServerRecordLike,
+  McpToolInfoLike,
+} from "../src/settings/optional-services.js";
 import {
   buildGeneralView,
   MAX_GENERAL_CHOICES,
@@ -31,6 +61,145 @@ import {
 
 // `settingsSection` adds the message record, `kind`, and `requestId` around a view.
 const MESSAGE_ENVELOPE_NODES = 3;
+// A result message adds the message record, `kind`, `requestId`, the `result`
+// record, and `ok` around its payload.
+const RESULT_ENVELOPE_NODES = 5;
+/**
+ * Nodes the contract wire scan charges for one payload: every visited value,
+ * including each record, each array, and each primitive leaf.
+ * @param value - payload to measure.
+ * @returns the node count the contract scan budget is compared against.
+ */
+function countWireNodes(value: unknown): number {
+  if (Array.isArray(value)) {
+    return 1 + value.reduce<number>(
+      (total, item) => total + countWireNodes(item),
+      0,
+    );
+  }
+  if (typeof value !== "object" || value === null) return 1;
+  return 1 + Object.values(value).reduce<number>(
+    (total, child) => total + countWireNodes(child),
+    0,
+  );
+}
+
+function maxString(prefix: string, length = MAX_WIRE_IDENTIFIER_LENGTH): string {
+  return `${prefix}${"x".repeat(length - prefix.length)}`;
+}
+
+// Cap-length strings are shared where the wire contract allows repeats; only
+// env names and server ids must stay distinct. Every fixture object below is
+// built fresh so the wire scan never sees a repeated record.
+const MAX_ID = maxString("id-");
+const MAX_URL = maxString("https://mcp.example/", MAX_WIRE_URL_LENGTH);
+const MAX_ENV_VALUE = maxString("env-value-", MAX_SECRET_VALUE_LENGTH);
+const MAX_DESCRIPTION = maxString("description-", MAX_MCP_LOG_DETAIL_LENGTH);
+const MAX_LOG_MESSAGE = maxString("message-", MAX_MCP_LOG_MESSAGE_LENGTH);
+const ENV_NAMES = Array.from(
+  { length: MAX_MCP_ENV_ENTRIES },
+  (_, entry) => maxString(`ENV_${entry}_`),
+);
+
+function maximalMcpRecord(
+  index: number,
+  auth: McpServerRecordLike["auth"],
+): McpServerRecordLike {
+  return {
+    id: `server-${index}`,
+    serverName: MAX_ID,
+    enabled: true,
+    transport: "stdio",
+    command: MAX_ID,
+    args: Array.from({ length: MAX_MCP_ARGS }, () => MAX_ID),
+    env: Object.fromEntries(ENV_NAMES.map((name) => [name, MAX_ENV_VALUE])),
+    cwd: MAX_ID,
+    auth,
+    disabledTools: Array.from({ length: MAX_MCP_DISABLED_TOOLS }, () => MAX_ID),
+    toolCallTimeoutMs: 600_000,
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1_000,
+      maxDelayMs: 60_000,
+      maxAttempts: 10,
+    },
+    createdAt: MAX_ID,
+    updatedAt: MAX_ID,
+  };
+}
+
+function oauthAuth(): McpServerRecordLike["auth"] {
+  return {
+    kind: "oauth",
+    clientId: MAX_ID,
+    authorizeUrl: MAX_URL,
+    tokenUrl: MAX_URL,
+    scopes: Array.from({ length: MAX_MCP_SCOPES }, () => MAX_ID),
+    redirectPath: MAX_ID,
+  };
+}
+
+const HEADER_NAMES = Array.from(
+  { length: MAX_MCP_HEADER_NAMES },
+  (_, name) => maxString(`Header-${name}-`),
+);
+
+function headerAuth(): McpServerRecordLike["auth"] {
+  return { kind: "headers", headerNames: [...HEADER_NAMES] };
+}
+
+function maximalTools(): McpToolInfoLike[] {
+  return Array.from({ length: MAX_MCP_TOOLS }, (_, tool) => ({
+    name: MAX_ID,
+    description: MAX_DESCRIPTION,
+    enabled: tool % 2 === 0,
+  }));
+}
+
+function maximalLogEntries(): McpLogEntryLike[] {
+  return Array.from({ length: MAX_MCP_LOG_ENTRIES }, () => ({
+    at: MAX_ID,
+    level: "error" as const,
+    message: MAX_LOG_MESSAGE,
+    detail: MAX_DESCRIPTION,
+  }));
+}
+
+/** Provide a fake `mcp` service that answers every read from fixed fixtures. */
+function provideMcp(ctx: Context, options: {
+  records: McpServerRecordLike[];
+  tools?: McpToolInfoLike[];
+  logs?: McpLogEntryLike[];
+  describeSecrets?: boolean;
+}): void {
+  const byId = new Map(options.records.map((record) => [record.id, record]));
+  ctx.provide("mcp", {
+    list: () => options.records,
+    get: (id: string) => byId.get(id),
+    upsert: async (record: McpServerRecordLike) => record,
+    remove: async () => {},
+    setEnabled: async () => {},
+    connect: async () => {},
+    disconnect: async () => {},
+    getStatus: () => ({
+      state: "connected",
+      toolCount: options.tools?.length ?? 0,
+      connectedAt: MAX_ID,
+    }),
+    getLogs: () => ({ next: MAX_MCP_LOG_ENTRIES, entries: options.logs ?? [] }),
+    getTools: () => options.tools ?? [],
+    setToolEnabled: async () => {},
+    clearOAuth: async () => {},
+    setSecrets: async () => {},
+    ...(options.describeSecrets === true
+      ? {
+          describeSecrets: async () => Object.fromEntries(
+            HEADER_NAMES.map((name) => [name, { configured: true }]),
+          ),
+        }
+      : {}),
+  } as never);
+}
 
 const profileRefs = {
   "1": {
@@ -115,6 +284,14 @@ describe("bridge projection ceilings stay inside the contract wire scan", () => 
       .toBeGreaterThan(MODELS_MAX_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
     expect(SETTINGS_WIRE_SCAN_NODE_LIMIT)
       .toBeGreaterThan(PLUGINS_MAX_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
+    expect(SETTINGS_WIRE_SCAN_NODE_LIMIT)
+      .toBeGreaterThan(MAX_MCP_LIST_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
+    expect(SETTINGS_WIRE_SCAN_NODE_LIMIT)
+      .toBeGreaterThan(MAX_MCP_DETAIL_NODES + RESULT_ENVELOPE_NODES);
+    expect(SETTINGS_WIRE_SCAN_NODE_LIMIT)
+      .toBeGreaterThan(MAX_MCP_LOGS_MESSAGE_NODES + RESULT_ENVELOPE_NODES);
+    expect(SETTINGS_WIRE_SCAN_NODE_LIMIT)
+      .toBeGreaterThan(MAX_WEB_SEARCH_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
   });
 
   it("keeps namespace projection below the aggregate view ceilings", () => {
@@ -311,5 +488,195 @@ describe("bridge projection ceilings stay inside the contract wire scan", () => 
     expect(view.permissionPresets).toHaveLength(MAX_GENERAL_CHOICES);
     expect(isOutboundMessage(sectionMessage("general-max", view))).toBe(true);
     await ctx.fiber.dispose();
+  });
+
+  it("accepts an MCP list view built at every MCP record cap", async () => {
+    const ctx = new Context();
+    provideMcp(ctx, {
+      records: Array.from(
+        { length: MAX_MCP_SERVERS },
+        (_, index) => maximalMcpRecord(index, oauthAuth()),
+      ),
+      describeSecrets: true,
+    });
+
+    const view = await buildMcpView(ctx);
+    const message = sectionMessage("mcp-max", view);
+
+    expect(view.servers).toHaveLength(MAX_MCP_SERVERS);
+    expect(view.servers[0]?.server.args).toHaveLength(MAX_MCP_ARGS);
+    expect(view.servers[0]?.server.env).toHaveLength(MAX_MCP_ENV_ENTRIES);
+    expect(view.servers[0]?.server.disabledTools)
+      .toHaveLength(MAX_MCP_DISABLED_TOOLS);
+    // The largest producer payload the contract scan budget is sized for:
+    // 7 view nodes plus 576 nodes for each maximal server row, and 3 more for
+    // the message envelope.
+    expect(countWireNodes(view)).toBe(7 + MAX_MCP_SERVERS * 576);
+    expect(countWireNodes(view)).toBe(36_871);
+    expect(countWireNodes(view)).toBeLessThanOrEqual(MAX_MCP_LIST_VIEW_NODES);
+    expect(countWireNodes(message)).toBe(36_874);
+    expect(countWireNodes(message))
+      .toBeLessThanOrEqual(MAX_MCP_LIST_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
+    expect(isOutboundMessage(message)).toBe(true);
+    await ctx.fiber.dispose();
+  });
+
+  it("accepts an MCP detail built at every tool and secret cap", async () => {
+    const ctx = new Context();
+    provideMcp(ctx, {
+      records: [maximalMcpRecord(0, headerAuth())],
+      tools: maximalTools(),
+      describeSecrets: true,
+    });
+
+    const detail = await buildMcpDetail(ctx, "server-0");
+    const message = {
+      kind: "mcpServer",
+      requestId: "mcp-detail-max",
+      result: { ok: true, detail },
+    };
+
+    expect(detail.tools).toHaveLength(MAX_MCP_TOOLS);
+    expect(detail.secrets).toEqual({
+      kind: "known",
+      secrets: HEADER_NAMES.map((name) => ({ name, configured: true })),
+    });
+    expect(countWireNodes(message))
+      .toBeLessThanOrEqual(MAX_MCP_DETAIL_NODES + RESULT_ENVELOPE_NODES);
+    expect(isOutboundMessage(message)).toBe(true);
+    await ctx.fiber.dispose();
+  });
+
+  it("accepts a logs page built at the entry cap", async () => {
+    const ctx = new Context();
+    provideMcp(ctx, {
+      records: [maximalMcpRecord(0, headerAuth())],
+      logs: maximalLogEntries(),
+    });
+
+    const result = readMcpLogs(ctx, "server-0");
+    const message = {
+      kind: "mcpLogs",
+      requestId: "mcp-logs-max",
+      result: { ok: true, ...result },
+    };
+
+    expect(result.entries).toHaveLength(MAX_MCP_LOG_ENTRIES);
+    expect(result.entries[0]?.message).toHaveLength(MAX_MCP_LOG_MESSAGE_LENGTH);
+    expect(result.entries[0]?.detail).toHaveLength(MAX_MCP_LOG_DETAIL_LENGTH);
+    expect(countWireNodes(message))
+      .toBeLessThanOrEqual(MAX_MCP_LOGS_MESSAGE_NODES + RESULT_ENVELOPE_NODES);
+    expect(isOutboundMessage(message)).toBe(true);
+    await ctx.fiber.dispose();
+  });
+
+  it("accepts a Web Search view with every endpoint override at its cap", async () => {
+    const ctx = new Context();
+    ctx.provide("webSearchManager", {
+      getCatalog: () => ({
+        engine: "searxng",
+        engines: {
+          tavily: { baseURL: MAX_URL },
+          brave: { baseURL: MAX_URL },
+          searxng: { baseURL: MAX_URL },
+        },
+      }),
+      putCatalog: async (catalog: unknown) => catalog,
+      describeSecrets: async () => ({
+        TAVILY_API_KEY: { configured: true },
+        BRAVE_API_KEY: { configured: true },
+      }),
+      putSecrets: async () => {},
+      available: () => true,
+    } as never);
+
+    const view = await buildWebSearchView(ctx);
+    const message = sectionMessage("web-search-max", view);
+
+    expect(view.engines).toHaveLength(3);
+    expect(view.secrets).toHaveLength(2);
+    expect(countWireNodes(message))
+      .toBeLessThanOrEqual(MAX_WEB_SEARCH_VIEW_NODES + MESSAGE_ENVELOPE_NODES);
+    expect(isOutboundMessage(message)).toBe(true);
+    await ctx.fiber.dispose();
+  });
+
+  it("rejects one over-cap payload per optional message family", () => {
+    const server = {
+      id: "server-over",
+      serverName: "over",
+      enabled: true,
+      transport: "stdio" as const,
+      command: "over",
+      auth: { kind: "none" as const },
+      toolCallTimeoutMs: 1_000,
+      reconnect: {
+        enabled: false,
+        initialDelayMs: 1,
+        maxDelayMs: 2,
+        maxAttempts: 0,
+      },
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const listItem = () => ({
+      server: { ...server, reconnect: { ...server.reconnect } },
+      status: { state: "disconnected" as const },
+      toolCount: 0,
+      disabledToolCount: 0,
+    });
+
+    expect(isOutboundMessage(sectionMessage("mcp-over", {
+      section: "mcp",
+      servers: Array.from({ length: MAX_MCP_SERVERS + 1 }, listItem),
+      secretStates: "available",
+      oauth: { kind: "manual", reason: "no-callback-origin" },
+    }))).toBe(false);
+
+    expect(isOutboundMessage({
+      kind: "mcpServer",
+      requestId: "mcp-detail-over",
+      result: {
+        ok: true,
+        detail: {
+          server: { ...server, reconnect: { ...server.reconnect } },
+          status: { state: "disconnected" },
+          tools: Array.from({ length: MAX_MCP_TOOLS + 1 }, () => ({
+            name: "tool",
+            description: "",
+            enabled: true,
+          })),
+          secrets: { kind: "unknown" },
+        },
+      },
+    })).toBe(false);
+
+    expect(isOutboundMessage({
+      kind: "mcpLogs",
+      requestId: "mcp-logs-over",
+      result: {
+        ok: true,
+        serverId: "server-over",
+        next: 1,
+        entries: Array.from({ length: MAX_MCP_LOG_ENTRIES + 1 }, () => ({
+          at: "at",
+          level: "info",
+          message: "message",
+        })),
+      },
+    })).toBe(false);
+
+    expect(isOutboundMessage(sectionMessage("web-search-over", {
+      section: "web-search",
+      engine: "tavily",
+      engines: [
+        { engine: "tavily", baseURLRequired: false },
+        { engine: "brave", baseURLRequired: false },
+        { engine: "searxng", baseURLRequired: true },
+        { engine: "tavily", baseURLRequired: false },
+      ],
+      secrets: [],
+      available: true,
+    }))).toBe(false);
   });
 });

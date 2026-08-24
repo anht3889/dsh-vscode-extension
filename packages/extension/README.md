@@ -36,7 +36,8 @@ button; Enter or Space opens the dialog. Opening it closes Recent and any
 composer picker while preserving the transcript, prompt draft, and attachments.
 Conversation streaming continues while the dialog is open. Escape, the backdrop,
 the close button, and the gear close it; closing returns focus to the gear
-button. Staged changes prompt before they are discarded. The five sections are:
+button. Staged changes prompt before they are discarded. The five core sections
+are:
 
 - **General** — future-session agent-preset and permission defaults, language,
   appearance, and Busy Enter behavior. Current-session model and permission
@@ -60,6 +61,49 @@ button. Staged changes prompt before they are discarded. The five sections are:
 - **Extension** — DSH binary path, handshake timeout, VS Code Settings, trusted
   actions for the DSH settings document/home and user-preset folders, and
   explicit Restart DSH.
+
+### Optional plugin settings
+
+MCP and Web Search rows appear after Plugins only while the corresponding
+plugin service is mounted in the profile launched by the extension. Service
+availability is the gate: an absent service leaves no row or error. While the
+external Web Search service is absent, the core `web-search-deepseek` card
+remains in Plugins.
+
+MCP uses the installed `@anht3889/dsh-mcp-mgmt-bundle` without requiring a
+plugin change. A build without `describeSecrets` reports secret state as
+unknown, and a build without `onCatalogChanged` refreshes by polling without
+catalog notifications. OAuth server configuration, `OAUTH_CLIENT_SECRET`
+storage, and token clearing work in the editor, but authorization must be
+completed from DSH Web; the extension does not launch OAuth. MCP secret values
+can be replaced but cannot be unset here.
+
+One Save writes the MCP record and then its staged secrets. Save stays
+unavailable, with the offending fields marked, until the record is complete,
+because the webview-to-host relay discards a malformed command; Cancel remains
+available throughout. Explicit secret continuation appears only when a requested
+value is no longer held locally, which happens when the request outlives the
+editor that staged it.
+
+Web Search requires a `dsh-web-search` build that publishes
+`ctx.webSearchManager` and the separately published
+`@anht3889/dsh-web-search-service` package on which that build depends. Until
+that build is installed, the Web Search row is absent and the core
+`web-search-deepseek` Plugins card remains. Tavily and Brave keys can be
+replaced but cannot be unset here.
+
+Catalog changes apply immediately inside the profile that writes them. Each
+running profile caches its own catalog in memory, so a catalog changed by
+another already-running profile does not live-sync and becomes visible only
+after the receiving profile restarts. MCP connection state is likewise local
+to the profile's DSH process.
+
+Stored secret values never travel from a plugin into the extension host or
+webview. New values travel only to the owning plugin, remain component-local
+while staged or retained for a failed-write retry, and are excluded from
+reducer state, retained webview state, logs, diagnostics, snapshots, and
+outbound protocol records. A successful write or disconnect clears staged
+values.
 
 DSH-backed settings use the active `$DSH_HOME` settings and credentials stores.
 They are global to every workspace and session using that DSH home, not scoped
@@ -98,7 +142,7 @@ default is written globally. Multi-field updates use best-effort compensation
 but are not an atomic VS Code configuration transaction. Trusted filesystem
 actions accept only bridge-resolved DSH targets, never a webview-provided path.
 
-The extension and bridge ship protocol version 5 together. Protocol v4 submit
+The extension and bridge ship protocol version 6 together. Older submit
 or settings records are rejected; there is no cross-version compatibility shim.
 Multi-stage model, plugin-credential, preset-default/delete, and Extension
 configuration operations are intentionally non-atomic. The UI reports partial

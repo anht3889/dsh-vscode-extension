@@ -24,8 +24,14 @@ function hooks() {
       listFileReferences: vi.fn(),
       listSlashItems: vi.fn(),
       executeSlashCommand: vi.fn(),
+      getCapabilities: vi.fn(),
+      capabilities: vi.fn(() => []),
       getSection: vi.fn(),
+      getMcpServer: vi.fn(),
+      getMcpLogs: vi.fn(),
+      runMcpOperation: vi.fn(),
       mutate: vi.fn(),
+      setWebSearchConfig: vi.fn(),
       setCredential: vi.fn(),
       unsetCredential: vi.fn(),
       copyPreset: vi.fn(),
@@ -223,6 +229,10 @@ describe("dispatchCommand", () => {
     } as const;
 
     dispatchCommand(inertCtx, {
+      kind: "getSettingsCapabilities",
+      requestId: "c1",
+    }, h);
+    dispatchCommand(inertCtx, {
       kind: "getSettingsSection",
       requestId: "s1",
       section: "general",
@@ -235,6 +245,7 @@ describe("dispatchCommand", () => {
     dispatchCommand(inertCtx, readPreset, h);
     dispatchCommand(inertCtx, resolvePath, h);
 
+    expect(h.runner.getCapabilities).toHaveBeenCalledWith("c1");
     expect(h.runner.getSection).toHaveBeenCalledWith("s1", "general");
     expect(h.runner.mutate).toHaveBeenCalledWith(mutation);
     expect(h.runner.setCredential).toHaveBeenCalledWith(setCredential);
@@ -243,5 +254,56 @@ describe("dispatchCommand", () => {
     expect(h.runner.deletePreset).toHaveBeenCalledWith(deletePreset);
     expect(h.runner.readPreset).toHaveBeenCalledWith(readPreset);
     expect(h.runner.resolvePath).toHaveBeenCalledWith(resolvePath);
+  });
+
+  it("routes a Web Search save to the retained coordinator", () => {
+    const h = hooks();
+    const message: Extract<InboundMessage, { kind: "setWebSearchConfig" }> = {
+      kind: "setWebSearchConfig",
+      requestId: "web-search-save",
+      catalog: {
+        engine: "tavily",
+        engines: [{ engine: "tavily", baseURL: "https://tavily.example" }],
+      },
+      secrets: [{ ref: "TAVILY_API_KEY", value: "fixture-secret" }],
+    };
+
+    dispatchCommand(inertCtx, message, h);
+
+    expect(h.runner.setWebSearchConfig).toHaveBeenCalledWith(message);
+  });
+
+  it("routes MCP detail and logs reads to the retained coordinator", () => {
+    const h = hooks();
+    const detail: Extract<InboundMessage, { kind: "getMcpServer" }> = {
+      kind: "getMcpServer",
+      requestId: "detail",
+      serverId: "server-1",
+    };
+    const logs: Extract<InboundMessage, { kind: "getMcpLogs" }> = {
+      kind: "getMcpLogs",
+      requestId: "logs",
+      serverId: "server-1",
+      after: 4,
+    };
+
+    dispatchCommand(inertCtx, detail, h);
+    dispatchCommand(inertCtx, logs, h);
+
+    expect(h.runner.getMcpServer).toHaveBeenCalledWith(detail);
+    expect(h.runner.getMcpLogs).toHaveBeenCalledWith(logs);
+  });
+
+  it("routes an MCP operation to the retained coordinator", () => {
+    const h = hooks();
+    const message: Extract<InboundMessage, { kind: "runMcpOperation" }> = {
+      kind: "runMcpOperation",
+      requestId: "connect",
+      operation: { kind: "connectServer", serverId: "server-1" },
+    };
+
+    dispatchCommand(inertCtx, message, h);
+
+    expect(h.runner.runMcpOperation).toHaveBeenCalledWith(message);
   });
 });

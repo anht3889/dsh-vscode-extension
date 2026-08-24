@@ -7,8 +7,10 @@ import {
 import { isOutboundMessage } from "@dsh-vscode/contract";
 import {
   MAX_COLLECTION_ENTRIES,
+  MAX_PLUGIN_MESSAGE_LENGTH,
   projectNamespace,
   projectSettingsError,
+  truncatePluginMessage,
 } from "./project.js";
 
 const descriptor = (overrides: Partial<SettingsDescriptor> = {}): SettingsDescriptor => ({
@@ -124,6 +126,13 @@ describe("settings projection", () => {
 });
 
 describe("settings errors", () => {
+  it("keeps a bounded plugin message and truncates one character beyond it", () => {
+    expect(truncatePluginMessage("x".repeat(MAX_PLUGIN_MESSAGE_LENGTH)))
+      .toHaveLength(MAX_PLUGIN_MESSAGE_LENGTH);
+    expect(truncatePluginMessage("x".repeat(MAX_PLUGIN_MESSAGE_LENGTH + 1)))
+      .toBe("x".repeat(MAX_PLUGIN_MESSAGE_LENGTH));
+  });
+
   it("maps conflicts with the authoritative actual revision", () => {
     expect(projectSettingsError(
       new SettingsConflictError(settingsNamespace("provider-test"), 3, 7),

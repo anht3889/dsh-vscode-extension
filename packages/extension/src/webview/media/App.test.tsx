@@ -21,7 +21,12 @@ import {
 } from "vitest";
 import type {
   EncodedImageAttachment,
+  McpServerDetailWire,
+  McpServerWire,
+  McpSettingsView,
   OutboundMessage,
+  SettingsSectionId,
+  SettingsSectionMessage,
   SlashMenuItem,
 } from "@dsh-vscode/contract";
 import type { UiCommand } from "./vscode.js";
@@ -320,6 +325,89 @@ const READ_ONLY_WEB_PLUGINS = {
   inventory: [],
 };
 
+const WEB_SEARCH = {
+  section: "web-search" as const,
+  engine: "tavily" as const,
+  engines: [
+    {
+      engine: "tavily" as const,
+      defaultBaseURL: "https://api.tavily.com",
+      baseURLRequired: false,
+      secretRef: "TAVILY_API_KEY" as const,
+    },
+    {
+      engine: "brave" as const,
+      defaultBaseURL: "https://api.search.brave.com",
+      baseURLRequired: false,
+      secretRef: "BRAVE_API_KEY" as const,
+    },
+    {
+      engine: "searxng" as const,
+      baseURLRequired: true,
+    },
+  ],
+  secrets: [
+    { ref: "TAVILY_API_KEY" as const, configured: false, writable: true },
+    { ref: "BRAVE_API_KEY" as const, configured: false, writable: true },
+  ],
+  available: false,
+};
+
+const MCP_SERVER: McpServerWire = {
+  id: "alpha",
+  serverName: "Alpha",
+  enabled: false,
+  transport: "stdio",
+  command: "alpha-mcp",
+  auth: { kind: "none" },
+  toolCallTimeoutMs: 30_000,
+  reconnect: {
+    enabled: true,
+    initialDelayMs: 1_000,
+    maxDelayMs: 30_000,
+    maxAttempts: 5,
+  },
+  createdAt: "2026-08-23T00:00:00.000Z",
+  updatedAt: "2026-08-23T00:00:00.000Z",
+};
+
+const MCP: McpSettingsView = {
+  section: "mcp",
+  servers: [{
+    server: MCP_SERVER,
+    status: { state: "disconnected" },
+    toolCount: 0,
+    disabledToolCount: 0,
+  }],
+  secretStates: "available",
+  oauth: { kind: "manual", reason: "no-callback-origin" },
+};
+
+function mcpView(...servers: McpServerDetailWire[]): McpSettingsView {
+  return {
+    ...MCP,
+    servers: servers.map((detail) => ({
+      server: detail.server,
+      status: detail.status,
+      toolCount: detail.tools.length,
+      disabledToolCount: detail.tools.filter((tool) => !tool.enabled).length,
+    })),
+  };
+}
+
+function mcpDetail(
+  server: McpServerWire,
+  extra: Partial<Omit<McpServerDetailWire, "server">> = {},
+): McpServerDetailWire {
+  return {
+    server,
+    status: { state: "disconnected" },
+    tools: [],
+    secrets: { kind: "known", secrets: [] },
+    ...extra,
+  };
+}
+
 const AGENT_PRESETS = {
   section: "agent-presets" as const,
   namespace: {
@@ -421,6 +509,61 @@ function commands(kind: UiCommand["cmd"]["kind"]): UiCommand["cmd"][] {
     )
     .map((message) => message.cmd)
     .filter((command) => command.kind === kind);
+}
+
+function sectionReads(section: SettingsSectionId): string[] {
+  return commands("getSettingsSection").flatMap((command) =>
+    command.kind === "getSettingsSection" && command.section === section
+      ? [command.requestId]
+      : [],
+  );
+}
+
+function answerSectionRead(
+  section: SettingsSectionId,
+  view: NonNullable<SettingsSectionMessage["view"]>,
+): void {
+  const requestId = sectionReads(section).at(-1);
+  if (requestId === undefined) {
+    throw new Error(`expected a ${section} section read`);
+  }
+  host({ kind: "settingsSection", requestId, view });
+}
+
+function openMcpSection(view: McpSettingsView = MCP): void {
+  renderReady();
+  host({ kind: "settingsCapabilities", sections: ["mcp", "web-search"] });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+  answerSectionRead("mcp", view);
+}
+
+function lastMcpOperation(): { requestId: string; operation: unknown } {
+  const command = commands("runMcpOperation").at(-1);
+  if (command?.kind !== "runMcpOperation") {
+    throw new Error("expected an MCP operation");
+  }
+  return command;
+}
+
+function answerMcpOperation(detail?: McpServerDetailWire): void {
+  host({
+    kind: "mcpOperation",
+    requestId: lastMcpOperation().requestId,
+    result: detail === undefined ? { ok: true } : { ok: true, detail },
+  });
+}
+
+function answerMcpDetail(detail: McpServerDetailWire): void {
+  const command = commands("getMcpServer").at(-1);
+  if (command?.kind !== "getMcpServer") {
+    throw new Error("expected an MCP detail read");
+  }
+  host({
+    kind: "mcpServer",
+    requestId: command.requestId,
+    result: { ok: true, detail },
+  });
 }
 
 async function openSlash(
@@ -1963,6 +2106,159 @@ describe("App settings shell", () => {
     expect(screen.getByLabelText("Timeout (ms)")).toHaveValue(20_000);
   });
 
+  it("routes Web Search reads, mutations, invalidation, and dirty close", () => {
+    renderReady();
+    host({
+      kind: "settingsCapabilities",
+      sections: ["web-search"],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+    const read = commands("getSettingsSection").find((command) =>
+      command.kind === "getSettingsSection" && command.section === "web-search");
+    if (read?.kind !== "getSettingsSection") {
+      throw new Error("expected Web Search read");
+    }
+    host({ kind: "settingsSection", requestId: read.requestId, view: WEB_SEARCH });
+    expect(screen.getByRole("radiogroup", { name: "Search engine" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("radio", { name: "SearXNG" }));
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://search.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Tavily API key"), {
+      target: { value: "app-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    expect(screen.getByLabelText("Base URL")).toHaveValue("https://search.example");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const mutation = commands("setWebSearchConfig")[0];
+    if (mutation?.kind !== "setWebSearchConfig") {
+      throw new Error("expected Web Search mutation");
+    }
+    expect(mutation).toMatchObject({
+      catalog: {
+        engine: "searxng",
+        engines: expect.arrayContaining([
+          { engine: "searxng", baseURL: "https://search.example" },
+        ]),
+      },
+      secrets: [{ ref: "TAVILY_API_KEY", value: "app-secret" }],
+    });
+    expect(JSON.stringify(setState.mock.calls)).not.toContain("app-secret");
+    host({
+      kind: "webSearchMutation",
+      requestId: mutation.requestId,
+      result: {
+        ok: true,
+        view: {
+          ...WEB_SEARCH,
+          engine: "searxng",
+          engines: WEB_SEARCH.engines.map((engine) =>
+            engine.engine === "searxng"
+              ? { ...engine, baseURL: "https://search.example" }
+              : engine),
+          available: true,
+        },
+        secretFailures: [],
+      },
+    });
+    expect(screen.getByLabelText("Tavily API key")).toHaveValue("");
+
+    postMessage.mockClear();
+    host({
+      kind: "settingsInvalidated",
+      sections: ["web-search"],
+      reason: "web-search",
+    });
+    expect(commands("getSettingsSection")).toContainEqual(expect.objectContaining({
+      kind: "getSettingsSection",
+      section: "web-search",
+    }));
+    const invalidatedRead = commands("getSettingsSection")[0];
+    if (invalidatedRead?.kind !== "getSettingsSection") {
+      throw new Error("expected invalidated Web Search read");
+    }
+    host({
+      kind: "settingsSection",
+      requestId: invalidatedRead.requestId,
+      view: WEB_SEARCH,
+    });
+    host({ kind: "settingsCapabilities", sections: [] });
+    expect(screen.queryByRole("button", { name: "Web Search" })).toBeNull();
+    expect(screen.getByRole("button", { name: "General" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  it("keeps a partial Web Search secret failure in dirty-close protection", () => {
+    renderReady();
+    host({ kind: "settingsCapabilities", sections: ["web-search"] });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+    const read = commands("getSettingsSection").find((command) =>
+      command.kind === "getSettingsSection" && command.section === "web-search");
+    if (read?.kind !== "getSettingsSection") {
+      throw new Error("expected Web Search read");
+    }
+    host({ kind: "settingsSection", requestId: read.requestId, view: WEB_SEARCH });
+    const secret = screen.getByLabelText("Brave API key");
+    fireEvent.change(secret, { target: { value: "retry-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const mutation = commands("setWebSearchConfig")[0];
+    if (mutation?.kind !== "setWebSearchConfig") {
+      throw new Error("expected Web Search mutation");
+    }
+    host({
+      kind: "webSearchMutation",
+      requestId: mutation.requestId,
+      result: {
+        ok: true,
+        view: WEB_SEARCH,
+        secretFailures: [{
+          ref: "BRAVE_API_KEY",
+          message: "BRAVE_API_KEY could not be stored",
+        }],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+    expect(screen.getByRole("alertdialog", {
+      name: "Discard unsaved settings?",
+    })).toBeVisible();
+    expect(secret).toHaveValue("retry-secret");
+    expect(JSON.stringify(setState.mock.calls)).not.toContain("retry-secret");
+  });
+
+  it("clears staged Web Search intent when switching sections", () => {
+    renderReady();
+    host({ kind: "settingsCapabilities", sections: ["web-search"] });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+    const read = commands("getSettingsSection").find((command) =>
+      command.kind === "getSettingsSection" && command.section === "web-search");
+    if (read?.kind !== "getSettingsSection") {
+      throw new Error("expected Web Search read");
+    }
+    host({ kind: "settingsSection", requestId: read.requestId, view: WEB_SEARCH });
+    fireEvent.change(screen.getByLabelText("Tavily API key"), {
+      target: { value: "switch-secret" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("alertdialog", {
+      name: "Discard unsaved settings?",
+    })).toBeNull();
+  });
+
   it("routes Plugins mutations to the persistent controller and marks restart required", () => {
     renderReady();
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -2614,5 +2910,661 @@ describe("App settings shell", () => {
     expect(screen.getByRole("dialog", {
       name: "Copy Agent Preset · Standard Mode",
     })).toBeVisible();
+  });
+});
+
+describe("App optional section lifecycle", () => {
+  function navLabels(): string[] {
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    return within(nav)
+      .getAllByRole("button")
+      .map((button) => (button.textContent ?? "").replace(/[^A-Za-z ]/gu, ""));
+  }
+
+  it("advertises both optional nav rows after Plugins and revokes them live", () => {
+    renderReady();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(navLabels()).toEqual([
+      "General",
+      "Models",
+      "Plugins",
+      "Agent Presets",
+      "Extension",
+    ]);
+
+    host({ kind: "settingsCapabilities", sections: ["mcp", "web-search"] });
+    expect(navLabels()).toEqual([
+      "General",
+      "Models",
+      "Plugins",
+      "MCP",
+      "Web Search",
+      "Agent Presets",
+      "Extension",
+    ]);
+
+    host({ kind: "settingsCapabilities", sections: [] });
+    expect(navLabels()).toEqual([
+      "General",
+      "Models",
+      "Plugins",
+      "Agent Presets",
+      "Extension",
+    ]);
+
+    host({ kind: "settingsCapabilities", sections: ["mcp"] });
+    expect(navLabels()).toEqual([
+      "General",
+      "Models",
+      "Plugins",
+      "MCP",
+      "Agent Presets",
+      "Extension",
+    ]);
+  });
+
+  it("polls MCP every 2,000 ms only while open, active, and connected", () => {
+    vi.useFakeTimers();
+    try {
+      openMcpSection();
+      expect(sectionReads("mcp")).toHaveLength(1);
+
+      act(() => {
+        vi.advanceTimersByTime(1_999);
+      });
+      expect(sectionReads("mcp")).toHaveLength(1);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sectionReads("mcp")).toHaveLength(2);
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(2);
+      answerSectionRead("mcp", MCP);
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(3);
+      answerSectionRead("mcp", MCP);
+
+      fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+      expect(sectionReads("web-search")).toHaveLength(1);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(3);
+      expect(sectionReads("web-search")).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(4);
+      answerSectionRead("mcp", MCP);
+
+      fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(4);
+
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(5);
+      answerSectionRead("mcp", MCP);
+
+      host({ kind: "hostDisconnected", detail: "DSH stopped" });
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("runs a full MCP server lifecycle through the relay", () => {
+    openMcpSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Beta" },
+    });
+    fireEvent.change(screen.getByLabelText("Command"), {
+      target: { value: "beta-mcp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(lastMcpOperation().operation).toMatchObject({
+      kind: "upsertServer",
+      server: { serverName: "Beta", transport: "stdio", command: "beta-mcp" },
+    });
+    const beta: McpServerWire = {
+      ...MCP_SERVER,
+      id: "beta",
+      serverName: "Beta",
+      command: "beta-mcp",
+    };
+    answerMcpOperation(mcpDetail(beta));
+    expect(screen.queryByRole("form")).toBeNull();
+    expect(screen.getByRole("listitem", { name: "Beta" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Alpha Prime" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(lastMcpOperation().operation).toMatchObject({
+      kind: "upsertServer",
+      server: { serverId: "alpha", serverName: "Alpha Prime" },
+    });
+    const renamed: McpServerWire = { ...MCP_SERVER, serverName: "Alpha Prime" };
+    answerMcpOperation(mcpDetail(renamed));
+    expect(screen.getByRole("listitem", { name: "Alpha Prime" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable Alpha Prime" }));
+    expect(lastMcpOperation().operation).toEqual({
+      kind: "setServerEnabled",
+      serverId: "alpha",
+      enabled: true,
+    });
+    const enabled: McpServerWire = { ...renamed, enabled: true };
+    answerMcpOperation(mcpDetail(enabled));
+    expect(
+      screen.getByRole("button", { name: "Disable Alpha Prime" }),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect Alpha Prime" }));
+    expect(lastMcpOperation().operation).toEqual({
+      kind: "connectServer",
+      serverId: "alpha",
+    });
+    answerMcpOperation(mcpDetail(enabled, {
+      status: { state: "connected", toolCount: 1, connectedAt: "now" },
+      tools: [{ name: "search", description: "Search", enabled: true }],
+    }));
+    expect(
+      screen.getByRole("button", { name: "Disconnect Alpha Prime" }),
+    ).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Alpha Prime.*Standard input/ }),
+    );
+    answerMcpDetail(mcpDetail(enabled, {
+      status: { state: "connected", toolCount: 1, connectedAt: "now" },
+      tools: [{ name: "search", description: "Search", enabled: true }],
+    }));
+    expect(
+      screen.getByRole("heading", { name: "Alpha Prime", level: 3 }),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "search" }));
+    expect(lastMcpOperation().operation).toEqual({
+      kind: "setToolEnabled",
+      serverId: "alpha",
+      toolName: "search",
+      enabled: false,
+    });
+    answerMcpOperation(mcpDetail(enabled, {
+      status: { state: "connected", toolCount: 1, connectedAt: "now" },
+      tools: [{ name: "search", description: "Search", enabled: false }],
+    }));
+    expect(screen.getByRole("checkbox", { name: "search" })).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Alpha Prime" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Delete MCP server?",
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Delete" }));
+    expect(lastMcpOperation().operation).toEqual({
+      kind: "removeServer",
+      serverId: "alpha",
+    });
+    answerMcpOperation();
+    expect(screen.queryByRole("listitem", { name: "Alpha Prime" })).toBeNull();
+    expect(screen.getByRole("listitem", { name: "Beta" })).toBeVisible();
+  });
+
+  it("reads MCP detail and appends newer log pages on each poll tick", () => {
+    vi.useFakeTimers();
+    try {
+      openMcpSection();
+      fireEvent.click(
+        screen.getByRole("button", { name: /Alpha.*Standard input/ }),
+      );
+      answerMcpDetail(mcpDetail(MCP_SERVER));
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      const firstLogs = commands("getMcpLogs").at(-1);
+      expect(firstLogs).toEqual(expect.objectContaining({
+        kind: "getMcpLogs",
+        serverId: "alpha",
+      }));
+      expect(firstLogs).not.toHaveProperty("after");
+      if (firstLogs?.kind !== "getMcpLogs") throw new Error("expected logs read");
+      host({
+        kind: "mcpLogs",
+        requestId: firstLogs.requestId,
+        result: {
+          ok: true,
+          serverId: "alpha",
+          next: 1,
+          entries: [{ at: "t1", level: "info", message: "first line" }],
+        },
+      });
+      expect(screen.getByText("first line")).toBeVisible();
+
+      answerSectionRead("mcp", MCP);
+      answerMcpDetail(mcpDetail(MCP_SERVER));
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      const secondLogs = commands("getMcpLogs").at(-1);
+      expect(secondLogs).toEqual(expect.objectContaining({
+        kind: "getMcpLogs",
+        serverId: "alpha",
+        after: 1,
+      }));
+      if (secondLogs?.kind !== "getMcpLogs") throw new Error("expected logs read");
+      host({
+        kind: "mcpLogs",
+        requestId: secondLogs.requestId,
+        result: {
+          ok: true,
+          serverId: "alpha",
+          next: 2,
+          entries: [{ at: "t2", level: "warn", message: "second line" }],
+        },
+      });
+      expect(screen.getByText("first line")).toBeVisible();
+      expect(screen.getByText("second line")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers MCP polling after a failed section read", () => {
+    vi.useFakeTimers();
+    try {
+      openMcpSection();
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      const failed = sectionReads("mcp").at(-1);
+      if (failed === undefined) throw new Error("expected a polled MCP read");
+      host({
+        kind: "settingsSection",
+        requestId: failed,
+        error: { code: "internal", message: "MCP list unavailable" },
+      });
+      expect(screen.getByText(
+        "MCP servers could not be refreshed. Retry to keep using the last loaded data.",
+      )).toBeVisible();
+      expect(screen.getByRole("listitem", { name: "Alpha" })).toBeVisible();
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(sectionReads("mcp")).toHaveLength(3);
+      answerSectionRead("mcp", MCP);
+      expect(screen.queryByText(
+        "MCP servers could not be refreshed. Retry to keep using the last loaded data.",
+      )).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an open MCP editor while an invalidated section refreshes", () => {
+    openMcpSection();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Alpha Draft" },
+    });
+    postMessage.mockClear();
+
+    host({ kind: "settingsInvalidated", sections: ["mcp"], reason: "mcp" });
+    expect(sectionReads("mcp")).toHaveLength(1);
+    expect(sectionReads("web-search")).toHaveLength(0);
+    answerSectionRead("mcp", mcpView(mcpDetail(MCP_SERVER, {
+      status: { state: "connected", toolCount: 2, connectedAt: "now" },
+    })));
+
+    expect(screen.getByLabelText("Server name")).toHaveValue("Alpha Draft");
+    expect(screen.getByText("Connected · 2 tools · now")).toBeVisible();
+  });
+
+  it("hydrates the MCP list once from the initial section read", () => {
+    openMcpSection();
+
+    expect(sectionReads("mcp")).toHaveLength(1);
+    expect(commands("getMcpServer")).toHaveLength(0);
+    expect(screen.getByRole("listitem", { name: "Alpha" })).toBeVisible();
+    expect(screen.queryByText("Loading settings…")).toBeNull();
+  });
+
+  it("keeps a deleted server absent when MCP remounts before the next poll", () => {
+    const beta: McpServerWire = {
+      ...MCP_SERVER,
+      id: "beta",
+      serverName: "Beta",
+      command: "beta-mcp",
+    };
+    openMcpSection(mcpView(mcpDetail(MCP_SERVER), mcpDetail(beta)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
+    fireEvent.click(
+      within(screen.getByRole("alertdialog", { name: "Delete MCP server?" }))
+        .getByRole("button", { name: "Delete" }),
+    );
+    answerMcpOperation();
+    expect(screen.queryByRole("listitem", { name: "Alpha" })).toBeNull();
+
+    postMessage.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(screen.getByRole("listitem", { name: "Beta" })).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: "Alpha" })).toBeNull();
+    expect(sectionReads("mcp")).toHaveLength(0);
+  });
+
+  it("keeps an adopted status and tool change across a section switch", () => {
+    openMcpSection();
+    fireEvent.click(screen.getByRole("button", { name: "Enable Alpha" }));
+    answerMcpOperation(mcpDetail({ ...MCP_SERVER, enabled: true }, {
+      status: { state: "connected", toolCount: 2, connectedAt: "now" },
+      tools: [
+        { name: "search", description: "Search", enabled: true },
+        { name: "fetch", description: "Fetch", enabled: false },
+      ],
+    }));
+    expect(screen.getByText("Connected · 2 tools · now")).toBeVisible();
+    postMessage.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    expect(screen.getByText("Connected · 2 tools · now")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Disable Alpha" })).toBeVisible();
+    expect(sectionReads("mcp")).toHaveLength(0);
+  });
+
+  it("leaves the MCP list unchanged for a stale operation reply", () => {
+    openMcpSection();
+    postMessage.mockClear();
+
+    host({
+      kind: "mcpOperation",
+      requestId: "operation-from-a-previous-life",
+      result: {
+        ok: true,
+        detail: mcpDetail({ ...MCP_SERVER, id: "ghost", serverName: "Ghost" }),
+      },
+    });
+    expect(screen.queryByRole("listitem", { name: "Ghost" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+
+    expect(screen.queryByRole("listitem", { name: "Ghost" })).toBeNull();
+    expect(screen.getByRole("listitem", { name: "Alpha" })).toBeVisible();
+    expect(sectionReads("mcp")).toHaveLength(0);
+  });
+
+  it("discards MCP state only when its capability disappears", () => {
+    openMcpSection();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Alpha Draft" },
+    });
+
+    host({ kind: "settingsCapabilities", sections: ["mcp", "web-search"] });
+    expect(screen.getByLabelText("Server name")).toHaveValue("Alpha Draft");
+
+    host({ kind: "settingsInvalidated", sections: ["mcp"], reason: "mcp" });
+    const pending = sectionReads("mcp").at(-1);
+    if (pending === undefined) throw new Error("expected a refresh read");
+
+    host({ kind: "settingsCapabilities", sections: ["web-search"] });
+    expect(screen.queryByRole("button", { name: "MCP" })).toBeNull();
+    expect(screen.getByRole("button", { name: "General" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    host({ kind: "settingsSection", requestId: pending, view: MCP });
+    expect(screen.queryByRole("button", { name: "MCP" })).toBeNull();
+    expect(screen.getByRole("button", { name: "General" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+    expect(screen.queryByRole("alertdialog", {
+      name: "Discard unsaved settings?",
+    })).toBeNull();
+  });
+
+  it("preserves both drafts across disconnect and refreshes on reconnect", () => {
+    vi.useFakeTimers();
+    try {
+      renderReady();
+      host({ kind: "settingsCapabilities", sections: ["mcp", "web-search"] });
+      fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+      const webSearchRead = sectionReads("web-search").at(-1);
+      if (webSearchRead === undefined) {
+        throw new Error("expected a Web Search read");
+      }
+      host({
+        kind: "settingsSection",
+        requestId: webSearchRead,
+        view: WEB_SEARCH,
+      });
+      fireEvent.click(screen.getByRole("radio", { name: "SearXNG" }));
+      fireEvent.change(screen.getByLabelText("Base URL"), {
+        target: { value: "https://search.example" },
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+      answerSectionRead("mcp", MCP);
+      fireEvent.click(
+        screen.getByRole("button", { name: /Alpha.*Standard input/ }),
+      );
+      answerMcpDetail(mcpDetail(MCP_SERVER));
+      fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+      fireEvent.change(screen.getByLabelText("Server name"), {
+        target: { value: "Alpha Draft" },
+      });
+      fireEvent.change(screen.getByLabelText("Authentication"), {
+        target: { value: "headers" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+      fireEvent.change(screen.getByLabelText("Header name 1"), {
+        target: { value: "Authorization" },
+      });
+      fireEvent.change(screen.getByLabelText("Header value 1"), {
+        target: { value: "mcp-disconnect-secret" },
+      });
+
+      host({ kind: "hostDisconnected", detail: "DSH stopped" });
+      expect(screen.getByRole("button", { name: "MCP" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Web Search" })).toBeVisible();
+      expect(screen.getByText("Unavailable")).toBeVisible();
+      expect(
+        within(screen.getByRole("dialog", { name: "Settings" })).getByRole(
+          "alert",
+        ),
+      ).toHaveTextContent("DSH stopped");
+      expect(screen.queryByRole("form")).toBeNull();
+      postMessage.mockClear();
+
+      host({
+        kind: "ready",
+        sessionId: "session-1",
+        cwd: "/workspace",
+        models: {
+          current: { provider: "deepseek", model: "chat" },
+          models: [{ provider: "deepseek", model: "chat", label: "Chat" }],
+        },
+        permissions: {
+          current: "workspace-write",
+          presets: [{ id: "workspace-write", label: "Workspace Write" }],
+        },
+        context: { used: 0, window: 128_000 },
+      });
+      expect(commands("getSettingsCapabilities")).toHaveLength(1);
+      expect(sectionReads("general")).toHaveLength(1);
+      host({ kind: "settingsCapabilities", sections: ["mcp", "web-search"] });
+      answerSectionRead("mcp", MCP);
+
+      expect(screen.getByLabelText("Server name")).toHaveValue("Alpha Draft");
+      expect(screen.getByLabelText("Header name 1")).toHaveValue("Authorization");
+      expect(screen.getByLabelText("Header value 1")).toHaveValue("");
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(commands("getMcpServer").at(-1)).toEqual(
+        expect.objectContaining({ kind: "getMcpServer", serverId: "alpha" }),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+      expect(screen.getByRole("radio", { name: "SearXNG" })).toBeChecked();
+      expect(screen.getByLabelText("Base URL")).toHaveValue(
+        "https://search.example",
+      );
+      expect(JSON.stringify(retainedState)).not.toContain(
+        "mcp-disconnect-secret",
+      );
+      expect(JSON.stringify(setState.mock.calls)).not.toContain(
+        "mcp-disconnect-secret",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("raises one dirty-close confirmation for both optional sections", () => {
+    renderReady();
+    host({ kind: "settingsCapabilities", sections: ["mcp", "web-search"] });
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+    const webSearchRead = sectionReads("web-search").at(-1);
+    if (webSearchRead === undefined) {
+      throw new Error("expected a Web Search read");
+    }
+    host({
+      kind: "settingsSection",
+      requestId: webSearchRead,
+      view: WEB_SEARCH,
+    });
+    fireEvent.click(screen.getByRole("radio", { name: "Brave Search" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+    answerSectionRead("mcp", MCP);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    fireEvent.change(screen.getByLabelText("Server name"), {
+      target: { value: "Alpha Draft" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Discard unsaved settings?",
+    });
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByLabelText("Server name")).toHaveValue("Alpha Draft");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("form")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Web Search" }));
+    expect(screen.getByRole("radio", { name: "Tavily" })).toBeChecked();
+  });
+
+  it("blocks settings dismissal while an MCP delete confirmation is open", () => {
+    openMcpSection();
+    fireEvent.click(screen.getByRole("button", { name: "Delete Alpha" }));
+    expect(screen.getByRole("alertdialog", {
+      name: "Delete MCP server?",
+    })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    expect(screen.queryByRole("alertdialog", {
+      name: "Delete MCP server?",
+    })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+  });
+
+  it("saves a staged MCP header secret without retaining its value", () => {
+    openMcpSection();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Alpha" }));
+    fireEvent.change(screen.getByLabelText("Authentication"), {
+      target: { value: "headers" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add header" }));
+    fireEvent.change(screen.getByLabelText("Header name 1"), {
+      target: { value: "Authorization" },
+    });
+    fireEvent.change(screen.getByLabelText("Header value 1"), {
+      target: { value: "mcp-header-secret" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const upsert = lastMcpOperation();
+    expect(upsert.operation).toMatchObject({
+      kind: "upsertServer",
+      server: { auth: { kind: "headers", headerNames: ["Authorization"] } },
+    });
+    expect(JSON.stringify(upsert)).not.toContain("mcp-header-secret");
+
+    const authorized: McpServerWire = {
+      ...MCP_SERVER,
+      auth: { kind: "headers", headerNames: ["Authorization"] },
+    };
+    answerMcpOperation(mcpDetail(authorized, {
+      secrets: {
+        kind: "known",
+        secrets: [{ name: "Authorization", configured: false }],
+      },
+    }));
+
+    expect(screen.queryByRole("button", { name: "Continue saving secrets" }))
+      .toBeNull();
+    expect(commands("runMcpOperation")).toHaveLength(2);
+    expect(lastMcpOperation().operation).toEqual({
+      kind: "setServerSecrets",
+      serverId: "alpha",
+      secrets: [{ name: "Authorization", value: "mcp-header-secret" }],
+    });
+    answerMcpOperation(mcpDetail(authorized, {
+      secrets: {
+        kind: "known",
+        secrets: [{ name: "Authorization", configured: true }],
+      },
+    }));
+
+    expect(screen.queryByRole("form")).toBeNull();
+    expect(JSON.stringify(retainedState)).not.toContain("mcp-header-secret");
+    expect(JSON.stringify(setState.mock.calls)).not.toContain(
+      "mcp-header-secret",
+    );
   });
 });

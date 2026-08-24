@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OutboundMessage } from "@dsh-vscode/contract";
+import type {
+  InboundMessage,
+  McpServerDetailWire,
+  OutboundMessage,
+} from "@dsh-vscode/contract";
 
 const { showWarningMessage, workspace } = vi.hoisted(() => ({
   showWarningMessage: vi.fn(),
@@ -25,7 +29,37 @@ vi.mock("vscode", () => ({
 }));
 
 import { DshChatProvider } from "./panel.js";
+import { McpController } from "./media/settings/sections/mcp/McpController.js";
 import { PartialExtensionSettingsWriteError } from "../settingsHost.js";
+
+const relayedDetail: McpServerDetailWire = {
+  server: {
+    id: "relayed",
+    serverName: "Relayed",
+    enabled: true,
+    transport: "stdio",
+    command: "mcp",
+    args: [],
+    env: [],
+    cwd: "",
+    auth: { kind: "headers", headerNames: ["Authorization"] },
+    toolCallTimeoutMs: 30_000,
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1_000,
+      maxDelayMs: 30_000,
+      maxAttempts: 5,
+    },
+    createdAt: "created",
+    updatedAt: "updated",
+  },
+  status: { state: "disconnected" },
+  tools: [],
+  secrets: {
+    kind: "known",
+    secrets: [{ name: "Authorization", configured: false }],
+  },
+};
 
 describe("settings Full Access host confirmation", () => {
   beforeEach(() => {
@@ -943,5 +977,102 @@ describe("safe DSH restart", () => {
         ([message]) => message.requestId === "restart-folder",
       ),
     ).toHaveLength(1);
+  });
+});
+
+describe("MCP settings command relay", () => {
+  /**
+   * The relay drops a command it cannot validate without replying, and every
+   * MCP controller command is a pending slot only a reply clears. Routing the
+   * commands the editor's own call sequence produces through the real
+   * `onUiCommand` relay fails here rather than stranding the editor at runtime.
+   */
+  it("forwards every command the MCP editor produces to the bridge", () => {
+    const sent: InboundMessage[] = [];
+    let next = 0;
+    const controller = new McpController(
+      (command) => sent.push(structuredClone(command)),
+      vi.fn(),
+      () => `relay-${++next}`,
+    );
+    controller.updateView({
+      section: "mcp",
+      servers: [],
+      secretStates: "available",
+      oauth: { kind: "manual", reason: "no-callback-origin" },
+    });
+
+    controller.openCreate();
+    controller.saveEditor();
+    controller.setEditorField("serverName", "Relayed");
+    controller.saveEditor();
+    controller.setEditorField("command", "mcp");
+    controller.setEditorField("auth", {
+      kind: "headers",
+      headerNames: ["Authorization"],
+    });
+    controller.stageSecret("Authorization", "relayed-secret");
+    controller.saveEditor({ Authorization: "relayed-secret" });
+    controller.receiveOperation({
+      kind: "mcpOperation",
+      requestId: "relay-1",
+      result: { ok: true, detail: relayedDetail },
+    });
+    controller.continueSecretSave({ Authorization: "relayed-secret" });
+    controller.receiveOperation({
+      kind: "mcpOperation",
+      requestId: "relay-2",
+      result: { ok: false, error: { code: "mcp-rejected", message: "store failed" } },
+    });
+    controller.retrySecrets({ Authorization: "relayed-secret" });
+    controller.select("relayed");
+    controller.poll();
+
+    expect(sent.map((command) => command.kind)).toEqual([
+      "runMcpOperation",
+      "runMcpOperation",
+      "runMcpOperation",
+      "getMcpServer",
+      "getMcpLogs",
+    ]);
+
+    const client = { send: vi.fn(), onMessage: vi.fn() };
+    const provider = new DshChatProvider({} as never, {} as never);
+    Object.assign(provider as object, {
+      view: { webview: { postMessage: vi.fn() } },
+      running: { client, child: child(), stop: vi.fn(async () => {}) },
+    });
+    for (const command of sent) {
+      provider.onUiCommand({ type: "dsh/ui", cmd: command });
+    }
+
+    expect(client.send.mock.calls.map(([command]) => command)).toEqual(sent);
+
+    client.send.mockClear();
+    provider.onUiCommand({
+      type: "dsh/ui",
+      cmd: {
+        kind: "runMcpOperation",
+        requestId: "relay-dropped",
+        operation: {
+          kind: "upsertServer",
+          server: {
+            serverName: "",
+            enabled: true,
+            transport: "stdio",
+            command: "",
+            auth: { kind: "none" },
+            toolCallTimeoutMs: 30_000,
+            reconnect: {
+              enabled: true,
+              initialDelayMs: 1_000,
+              maxDelayMs: 30_000,
+              maxAttempts: 5,
+            },
+          },
+        },
+      } as never,
+    });
+    expect(client.send).not.toHaveBeenCalled();
   });
 });

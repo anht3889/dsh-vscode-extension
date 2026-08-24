@@ -22,6 +22,41 @@ export const MAX_PROJECTED_DEPTH = 16;
  * addresses, so this stays above that directory cap.
  */
 export const MAX_COLLECTION_ENTRIES = 256;
+/** Characters retained from a plugin validation message before it leaves the bridge. */
+export const MAX_PLUGIN_MESSAGE_LENGTH = 512;
+
+/** @returns the message truncated to {@link MAX_PLUGIN_MESSAGE_LENGTH} characters. */
+export function truncatePluginMessage(message: string): string {
+  return message.slice(0, MAX_PLUGIN_MESSAGE_LENGTH);
+}
+
+/** Fail closed when a projected value exceeds its aggregate node or depth ceiling. */
+export function assertBounded(
+  value: unknown,
+  maxNodes: number,
+  maxDepth: number,
+  label: string,
+): void {
+  let nodes = 0;
+  const seen = new WeakSet<object>();
+  const visit = (candidate: unknown, depth: number): void => {
+    nodes += 1;
+    if (nodes > maxNodes || depth > maxDepth) {
+      throw new RangeError(`${label} exceeds bridge projection limits`);
+    }
+    if (typeof candidate !== "object" || candidate === null) return;
+    if (seen.has(candidate)) {
+      throw new RangeError(`${label} contains a cycle`);
+    }
+    seen.add(candidate);
+    for (const child of Array.isArray(candidate)
+      ? candidate
+      : Object.values(candidate)) {
+      visit(child, depth + 1);
+    }
+  };
+  visit(value, 0);
+}
 
 interface ProjectionState {
   nodes: number;

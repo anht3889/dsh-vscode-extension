@@ -1,4 +1,7 @@
-import type { SettingsSectionId } from "@dsh-vscode/contract";
+import type {
+  OptionalSettingsSectionId,
+  SettingsSectionId,
+} from "@dsh-vscode/contract";
 import type {
   SettingsAction,
   SettingsSectionState,
@@ -9,6 +12,8 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
   "general",
   "models",
   "plugins",
+  "mcp",
+  "web-search",
   "agent-presets",
 ];
 
@@ -28,8 +33,12 @@ export const initialSettingsState: SettingsState = {
     general: idleSection(),
     models: idleSection(),
     plugins: idleSection(),
+    mcp: { ...idleSection(), available: false },
+    "web-search": { ...idleSection(), available: false },
     "agent-presets": idleSection(),
   },
+  capabilities: [],
+  capabilitiesKnown: false,
   connected: true,
   connectionEpoch: 0,
   invalidationSeq: 0,
@@ -44,8 +53,16 @@ function updateSections(
     general: update("general", state.sections.general),
     models: update("models", state.sections.models),
     plugins: update("plugins", state.sections.plugins),
+    mcp: update("mcp", state.sections.mcp),
+    "web-search": update("web-search", state.sections["web-search"]),
     "agent-presets": update("agent-presets", state.sections["agent-presets"]),
   };
+}
+
+function isOptionalSection(
+  section: SettingsState["activeSection"],
+): section is OptionalSettingsSectionId {
+  return section === "mcp" || section === "web-search";
 }
 
 export function settingsReducer(
@@ -120,6 +137,41 @@ export function settingsReducer(
         sections: { ...state.sections, [section]: received },
       };
     }
+    case "mcpViewSynchronized": {
+      const current = state.sections.mcp;
+      // The MCP controller only mutates a list it already received, so an
+      // absent cache means the section read still owns hydration.
+      if (current.view === undefined) return state;
+      return {
+        ...state,
+        sections: {
+          ...state.sections,
+          mcp: { ...current, view: action.view },
+        },
+      };
+    }
+    case "settingsCapabilitiesReceived": {
+      const capabilities = [...action.message.sections];
+      const available = new Set(capabilities);
+      const sections = updateSections(state, (section, current) => {
+        if (!isOptionalSection(section)) return current;
+        if (!available.has(section)) {
+          return { status: "idle", stale: false, available: false };
+        }
+        return { ...current, available: state.connected };
+      });
+      return {
+        ...state,
+        activeSection:
+          isOptionalSection(state.activeSection) &&
+            !available.has(state.activeSection)
+            ? "general"
+            : state.activeSection,
+        capabilities,
+        capabilitiesKnown: true,
+        sections,
+      };
+    }
     case "settingsMutationReceived": {
       const namespace = action.message.result.ok
         ? action.message.result.namespace
@@ -179,16 +231,21 @@ export function settingsReducer(
         ...state,
         connected: true,
         connectionEpoch: state.connectionEpoch + 1,
-        sections: updateSections(state, (_section, current) =>
-          current.view === undefined
+        sections: updateSections(state, (section, current) => {
+          const available = !isOptionalSection(section) ||
+            state.capabilities.includes(section);
+          if (!available) {
+            return { status: "idle", stale: false, available: false };
+          }
+          return current.view === undefined
             ? { status: "idle", stale: true, available: true }
             : {
                 status: "ready",
                 view: current.view,
                 stale: true,
                 available: true,
-              },
-        ),
+              };
+        }),
       };
     case "settingsLocaleChanged":
       return state.locale === action.locale ? state : { ...state, locale: action.locale };
