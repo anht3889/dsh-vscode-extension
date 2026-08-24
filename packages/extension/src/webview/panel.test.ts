@@ -6,8 +6,9 @@ import type {
   OutboundMessage,
 } from "@dsh-vscode/contract";
 
-const { showWarningMessage, workspace } = vi.hoisted(() => ({
+const { showWarningMessage, workspace, openExternal } = vi.hoisted(() => ({
   showWarningMessage: vi.fn(),
+  openExternal: vi.fn(async () => true),
   workspace: {
     workspaceFolders: [] as Array<{ uri: { fsPath: string } }>,
   },
@@ -20,7 +21,9 @@ vi.mock("vscode", () => ({
   },
   ThemeColor: class {},
   OverviewRulerLane: { Right: 1 },
+  env: { openExternal },
   Uri: {
+    parse: (value: string) => ({ toString: () => value }),
     file: (path: string) => ({ toString: () => path }),
     joinPath: () => ({ toString: () => "asset" }),
   },
@@ -999,7 +1002,7 @@ describe("MCP settings command relay", () => {
       section: "mcp",
       servers: [],
       secretStates: "available",
-      oauth: { kind: "manual", reason: "no-callback-origin" },
+      oauth: { kind: "manual", reason: "no-callback-origin", discovery: "available" },
     });
 
     controller.openCreate();
@@ -1074,5 +1077,59 @@ describe("MCP settings command relay", () => {
       } as never,
     });
     expect(client.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCP authorize URL host open", () => {
+  beforeEach(() => {
+    openExternal.mockReset();
+    openExternal.mockResolvedValue(true);
+  });
+
+  it("opens a successful MCP authorize URL in the system browser before forwarding", () => {
+    const postMessage = vi.fn();
+    const provider = new DshChatProvider({} as never, {} as never);
+    Object.assign(provider as object, {
+      view: { webview: { postMessage } },
+    });
+    const message: OutboundMessage = {
+      kind: "mcpOperation",
+      requestId: "auth-1",
+      result: {
+        ok: true,
+        authorizeUrl: "https://idp.example/authorize?client_id=issued",
+      },
+    };
+
+    deliver(provider, message);
+
+    expect(openExternal).toHaveBeenCalledWith(
+      expect.objectContaining({ toString: expect.any(Function) }),
+    );
+    expect(openExternal.mock.calls[0]?.[0].toString()).toBe(
+      "https://idp.example/authorize?client_id=issued",
+    );
+    expect(postMessage).toHaveBeenCalledWith(message);
+    expect(openExternal.mock.invocationCallOrder[0]).toBeLessThan(
+      postMessage.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not open the browser for an ordinary MCP upsert", () => {
+    const postMessage = vi.fn();
+    const provider = new DshChatProvider({} as never, {} as never);
+    Object.assign(provider as object, {
+      view: { webview: { postMessage } },
+    });
+    const message: OutboundMessage = {
+      kind: "mcpOperation",
+      requestId: "upsert-1",
+      result: { ok: true, detail: relayedDetail },
+    };
+
+    deliver(provider, message);
+
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(message);
   });
 });

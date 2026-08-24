@@ -810,6 +810,13 @@ export class DshChatProvider implements vscode.WebviewViewProvider {
       this.currentSessionId = m.sessionId;
     }
 
+    if (
+      m.kind === "mcpOperation"
+      && m.result.ok
+      && m.result.authorizeUrl !== undefined
+    ) {
+      void vscode.env.openExternal(vscode.Uri.parse(m.result.authorizeUrl));
+    }
     this.updateStatus(m);
     this.view?.webview.postMessage(m);
   }
