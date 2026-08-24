@@ -3,9 +3,11 @@
 # process alive and drives repeated submit/cancel commands over the stdio command
 # loop, relaying session events and user-question asks back to the editor.
 #
-# It rides directly over dsh-base, so it needs no Host, HTTP server, browser
-# plugin, or Web runtime. `appExit` is supplied by the launcher (not dsh-base);
-# the plugin reads it only when it reports a fatal startup error.
+# It rides directly over dsh-base. It mounts a loopback `dsh-host-webserver`
+# on `127.0.0.1` with an OS-assigned port for OAuth callbacks only; it still
+# has no Host, `@deepseek-ai/dsh-web-app`, browser plugin, or Web runtime.
+# `appExit` is supplied by the launcher (not dsh-base); the plugin reads it
+# only when it reports a fatal startup error.
 
 - id: system-prompt
   config:
@@ -28,6 +30,11 @@
       name: '@deepseek-ai/dsh-client-ui-conversation'
     - id: plugin-inventory
       name: '@deepseek-ai/dsh-host-plugin-inventory'
+    - id: host-webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      config:
+        host: '127.0.0.1'
+        port: 0
     - id: vscode-runner
       name: '@dsh-vscode/bridge'
       inject: [agents, agentDefaultModel, sessions, userQuestions, appExit]

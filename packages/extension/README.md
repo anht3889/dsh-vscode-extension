@@ -74,9 +74,28 @@ MCP uses the installed `@anht3889/dsh-mcp-mgmt-bundle` without requiring a
 plugin change. A build without `describeSecrets` reports secret state as
 unknown, and a build without `onCatalogChanged` refreshes by polling without
 catalog notifications. OAuth server configuration, `OAUTH_CLIENT_SECRET`
-storage, and token clearing work in the editor, but authorization must be
-completed from DSH Web; the extension does not launch OAuth. MCP secret values
-can be replaced but cannot be unset here.
+storage, and token clearing work in the editor. MCP secret values can be
+replaced but cannot be unset here.
+
+- The vscode profile's `dsh` child listens on `127.0.0.1` with an OS-assigned
+  port for OAuth callbacks only.
+- Operators must add to **that profile's** `cordis.patch.yml` (the loader
+  applies this last):
+
+```yaml
+- id: mcp-mgmt-manager
+  config:
+    serveManagementHttpApi: false
+```
+
+- If that row is omitted, callbacks still work and `/mcp-management` is
+  reachable on loopback, matching DSH Web's local API.
+- **Add & Authorize** needs a plugin build that implements `discoverOAuth`,
+  `startOAuth`, and `oauthRedirectOrigin` (this workspace's MCP manager after
+  Task 1).
+- Advanced remains for providers that do not dynamically register a client.
+- A client registered only for DSH Web's port cannot be reused against
+  vscode's ephemeral port without re-registration.
 
 One Save writes the MCP record and then its staged secrets. Save stays
 unavailable, with the offending fields marked, until the record is complete,

@@ -17,9 +17,9 @@ The plugins remain the runtime authorities. The extension owns presentation and 
 ### Non-goals
 
 - Do not load plugin browser bundles (`@anht3889/dsh-mcp-mgmt-bundle/client`, `@anht3889/dsh-web-search-bundle/client`) in the VS Code webview, and do not add a client runtime, slot registry, or dynamic plugin-UI framework to the webview.
-- Do not start a DSH web server, loopback HTTP API, or `publicOrigin` in the `vscode` profile so that the plugins' own HTTP routes become reachable.
+- Do not start a DSH web server, loopback HTTP API, or `publicOrigin` in the `vscode` profile so that the plugins' own HTTP routes become reachable. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
 - Do not reimplement MCP transport, connection supervision, OAuth token exchange, catalog persistence, or search-engine adapters in the extension.
-- Do not implement OAuth authorization launch or callback handling in this phase.
+- Do not implement OAuth authorization launch or callback handling in this phase. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
 - Do not expose a stored secret value to the extension host, the webview, logs, or snapshots.
 - Do not add a compatibility shim for protocol version 5 clients or for plugin builds that predate the surfaces this design uses.
 - Do not virtualize the server list, tool list, or log view in this phase.
@@ -768,8 +768,8 @@ Both catalogs and both secret stores live under the same `$DSH_HOME` paths for t
 
 ## 14. Rulings and known deferrals
 
-1. OAuth authorization launch and callback handling are deferred. The `vscode` profile has no web server and no `publicOrigin`, so no redirect can be received. OAuth remains a first-class configuration type, existing tokens keep working through refresh, and the UI directs authorization to DSH Web.
-2. OAuth endpoint discovery is deferred with authorization, for the same reason: the plugin's discovery path composes a redirect URI and would throw without an origin.
+1. OAuth authorization launch and callback handling are deferred. The `vscode` profile has no web server and no `publicOrigin`, so no redirect can be received. OAuth remains a first-class configuration type, existing tokens keep working through refresh, and the UI directs authorization to DSH Web. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
+2. OAuth endpoint discovery is deferred with authorization, for the same reason: the plugin's discovery path composes a redirect URI and would throw without an origin. Superseded by `2026-08-24-dsh-vscode-mcp-oauth-onboarding-design.md`.
 3. No dynamic plugin-UI framework. The extension ships UI for these two known capabilities only. A third-party plugin gains no editor settings surface; adding one is a separate design with its own security review.
 4. Web Search keys cannot be unset from the editor, because the runtime offers no unset and writes non-empty values only. The UI says a key can be replaced but not removed. Unset arrives when the plugin supports it.
 5. Web Search secret `source` is not reported, because the runtime reports only a configured flag. Adding source reporting is a plugin-side change.
