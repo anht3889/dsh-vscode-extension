@@ -5,6 +5,19 @@
   "version": "0.1.0",
   "publisher": "anhtra3889",
   "license": "MIT",
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "harness",
+    "ai",
+    "agent",
+    "chat",
+    "coding-agent"
+  ],
   "icon": "resources/dsh.png",
   "type": "module",
   "engines": {
@@ -13,9 +26,9 @@
   "main": "./dist/extension.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/dsh-vscode-extension.git"
+    "url": "https://github.com/anht3889/dsh-vscode-extension.git"
   },
-  "homepage": "https://github.com/your-org/dsh-vscode-extension#readme",
+  "homepage": "https://github.com/anht3889/dsh-vscode-extension#readme",
   "readme": "README.md",
   "activationEvents": [
     "onView:dsh.chat",
