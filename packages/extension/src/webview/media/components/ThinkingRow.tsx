@@ -2,49 +2,36 @@ import React, { useEffect, useId, useRef, useState } from "react";
 
 interface ThinkingRowProps {
   text: string;
-  running: boolean;
+  active: boolean;
 }
 
-/** Return the first non-empty line of text. */
-export function firstLine(text: string): string {
-  return text.split(/\r?\n/).find((line) => line.trim() !== "") ?? "";
-}
-
-/** Return the latest non-empty line of text. */
-export function latestLine(text: string): string {
-  return [...text.split(/\r?\n/)]
-    .reverse()
-    .find((line) => line.trim() !== "") ?? "";
-}
-
-/** Render one expandable model-reasoning timeline row. */
-export function ThinkingRow({ text, running }: ThinkingRowProps): JSX.Element {
-  const [expanded, setExpanded] = useState(running);
+/** Render one expandable disclosure for a turn's combined reasoning. */
+export function ThinkingRow({ text, active }: ThinkingRowProps): JSX.Element {
+  const [expanded, setExpanded] = useState(active);
   const textId = useId();
-  const wasRunning = useRef(running);
+  const wasActive = useRef(active);
+  const title = active ? "Thinking" : "Thought";
 
   useEffect(() => {
-    if (wasRunning.current && !running) setExpanded(false);
-    wasRunning.current = running;
-  }, [running]);
-
-  const summary = running ? latestLine(text) : firstLine(text);
+    if (wasActive.current && !active) setExpanded(false);
+    wasActive.current = active;
+  }, [active]);
 
   return (
-    <article className="dsh-think" aria-label="Think">
+    <article className="dsh-think" aria-label={title}>
       <button
         className="dsh-row-toggle"
         aria-expanded={expanded}
         aria-controls={textId}
         onClick={() => setExpanded((value) => !value)}
       >
-        <span className="dsh-row-title">Think</span>
+        <span className="dsh-row-title">{title}</span>
         <span className="dsh-row-caret" aria-hidden="true">
           {expanded ? "▾" : "▸"}
         </span>
       </button>
-      <div className="dsh-row-summary" id={textId}>
-        {expanded ? text : summary}
+      <div className="dsh-row-summary" id={textId} hidden={!expanded}>
+        {expanded ? text : null}
       </div>
     </article>
   );

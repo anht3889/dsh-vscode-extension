@@ -30,7 +30,7 @@ The + control, left of the context meter, attaches workspace files and folders, 
 
 Your prompts appear as you typed them. Answers render as markdown, including headings, lists, tables, links, and fenced code with a copy button. Images in model output appear as links rather than inline pictures. Injected context (plugins, session references, subagent reports) stays out of the transcript.
 
-When a model shares its reasoning, a **Think** row opens while reasoning streams and collapses when answer text starts. You can expand it again to review the disclosed reasoning. Tool calls appear as expandable rows with their progress and results, while slash commands appear as separate command cards rather than prompts from you.
+When a model shares its reasoning, a **Thinking** disclosure appears under your message and stays open with every reasoning segment from that turn. After the response finishes, it collapses to **Thought**. Expanding **Thought** shows the full reasoning again. Tool calls appear as expandable rows with their progress and results, while slash commands appear as separate command cards rather than prompts from you.
 
 When tools propose file changes during the current turn, the timeline shows their diffs and an **Apply all diffs** button applies them to the editor together.
 

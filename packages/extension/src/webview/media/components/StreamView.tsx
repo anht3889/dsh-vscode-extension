@@ -12,6 +12,74 @@ interface StreamViewProps {
   onApply(): void;
 }
 
+type VisibleRow = Exclude<TimelineRow, { kind: "thinking" }>;
+
+type ProjectedRow =
+  | VisibleRow
+  | { kind: "thinking-group"; key: string; text: string; active: boolean };
+
+function turnIsActive(rows: TimelineRow[]): boolean {
+  return rows.some((row) => (
+    (row.kind === "thinking" && row.running)
+    || (row.kind === "assistant" && row.streaming)
+    || (row.kind === "tool" && row.status === "running")
+    || (row.kind === "command" && row.status === "running")
+  ));
+}
+
+function thinkingGroup(
+  key: string,
+  turn: TimelineRow[],
+): ProjectedRow | undefined {
+  const segments = turn.filter((row) => row.kind === "thinking");
+  if (segments.length === 0) return undefined;
+  return {
+    kind: "thinking-group",
+    key,
+    text: segments.map((row) => row.text).join("\n\n"),
+    active: turnIsActive(turn),
+  };
+}
+
+function appendTurn(
+  projected: ProjectedRow[],
+  key: string,
+  turn: TimelineRow[],
+): void {
+  const group = thinkingGroup(key, turn);
+  if (group !== undefined) projected.push(group);
+  for (const row of turn) {
+    if (row.kind !== "thinking") projected.push(row);
+  }
+}
+
+/** Lift each turn's thinking segments into one disclosure under that turn's user message. */
+export function projectTimeline(timeline: TimelineRow[]): ProjectedRow[] {
+  const projected: ProjectedRow[] = [];
+  let i = 0;
+  while (i < timeline.length) {
+    const row = timeline[i]!;
+    if (row.kind === "user") {
+      i += 1;
+      const turn: TimelineRow[] = [];
+      while (i < timeline.length && timeline[i]!.kind !== "user") {
+        turn.push(timeline[i]!);
+        i += 1;
+      }
+      projected.push(row);
+      appendTurn(projected, `thinking-${row.seq}`, turn);
+      continue;
+    }
+    const lead: TimelineRow[] = [];
+    while (i < timeline.length && timeline[i]!.kind !== "user") {
+      lead.push(timeline[i]!);
+      i += 1;
+    }
+    appendTurn(projected, "thinking-lead", lead);
+  }
+  return projected;
+}
+
 /** Distance from the bottom, in px, that still counts as "following the tail". */
 const STICK_THRESHOLD_PX = 24;
 
@@ -41,34 +109,39 @@ export function StreamView({
 
   return (
     <main className="dsh-stream" ref={view} onScroll={onScroll}>
-      {timeline.map((row, i) => {
-        const key = `${row.kind}-${row.seq}-${i}`;
-        switch (row.kind) {
+      {projectTimeline(timeline).map((entry, i) => {
+        if (entry.kind === "thinking-group") {
+          return (
+            <ThinkingRow
+              key={entry.key}
+              text={entry.text}
+              active={entry.active}
+            />
+          );
+        }
+        const key = `${entry.kind}-${entry.seq}-${i}`;
+        switch (entry.kind) {
           case "user":
           case "assistant":
             return (
               <article
-                className={`dsh-turn dsh-turn-${row.kind}`}
+                className={`dsh-turn dsh-turn-${entry.kind}`}
                 key={key}
-                aria-label={row.kind === "user" ? "You" : "DeepSeek Harness"}
+                aria-label={entry.kind === "user" ? "You" : "DeepSeek Harness"}
               >
-                {row.kind === "assistant" ? (
-                  <Markdown source={row.text} />
+                {entry.kind === "assistant" ? (
+                  <Markdown source={entry.text} />
                 ) : (
-                  <div className="dsh-turn-text">{row.text}</div>
+                  <div className="dsh-turn-text">{entry.text}</div>
                 )}
               </article>
             );
-          case "thinking":
-            return (
-              <ThinkingRow key={key} text={row.text} running={row.running} />
-            );
           case "tool":
-            return <ToolRow key={key} row={row} />;
+            return <ToolRow key={key} row={entry} />;
           case "command":
-            return <CommandRow key={key} row={row} />;
+            return <CommandRow key={key} row={entry} />;
           default: {
-            const exhaustive: never = row;
+            const exhaustive: never = entry;
             return exhaustive;
           }
         }

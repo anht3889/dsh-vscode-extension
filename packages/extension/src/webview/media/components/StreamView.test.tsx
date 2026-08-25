@@ -88,29 +88,23 @@ describe("StreamView", () => {
     expect(onApply).toHaveBeenCalled();
   });
 
-  it("renders thinking, assistant, tool, and command rows in array order", () => {
+  it("groups a turn's thinking under the user message as one disclosure", () => {
     render(
       <StreamView
         timeline={[
-          { kind: "thinking", seq: 1, text: "reasoning", running: false },
-          { kind: "assistant", seq: 2, text: "answer", streaming: false },
+          { kind: "user", seq: 1, text: "please edit" },
+          { kind: "thinking", seq: 2, text: "plan the edit", running: false },
           {
             kind: "tool",
             seq: 3,
             callId: "call-1",
             name: "read",
             argsRaw: "{\"path\":\"/a.ts\"}",
-            status: "stopped",
+            status: "ok",
             diffs: [],
           },
-          {
-            kind: "command",
-            seq: 4,
-            commandId: "command-1",
-            name: "goal",
-            args: "write tests",
-            status: "running",
-          },
+          { kind: "thinking", seq: 4, text: "review the result", running: false },
+          { kind: "assistant", seq: 5, text: "answer", streaming: false },
         ]}
         diffs={[]}
         onApply={vi.fn()}
@@ -120,7 +114,49 @@ describe("StreamView", () => {
     const labels = Array.from(stream.children).map(
       (element) => element.getAttribute("aria-label"),
     );
-    expect(labels).toEqual(["Think", "DeepSeek Harness", "read", "Command"]);
+    expect(labels).toEqual(["You", "Thought", "read", "DeepSeek Harness"]);
+    expect(screen.getByRole("button", { name: "Thought" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByText("plan the edit")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Thought" }));
+    const reasoning = screen.getByText(/plan the edit/);
+    expect(reasoning).toHaveTextContent("review the result");
+  });
+
+  it("keeps Thinking expanded until the current response finishes", () => {
+    const timeline: TimelineRow[] = [
+      { kind: "user", seq: 1, text: "hello" },
+      { kind: "thinking", seq: 2, text: "drafting", running: false },
+      { kind: "assistant", seq: 3, text: "answer", streaming: true },
+    ];
+    const { rerender } = render(
+      <StreamView timeline={timeline} diffs={[]} onApply={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "Thinking" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByText("drafting")).toBeVisible();
+
+    rerender(
+      <StreamView
+        timeline={[
+          timeline[0],
+          timeline[1],
+          { kind: "assistant", seq: 3, text: "answer", streaming: false },
+        ]}
+        diffs={[]}
+        onApply={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Thought" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByText("drafting")).toBeNull();
   });
 
   it("does not show Apply all for row-local diffs alone", () => {

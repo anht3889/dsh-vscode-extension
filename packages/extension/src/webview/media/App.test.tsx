@@ -954,16 +954,29 @@ describe("App slash flow", () => {
 });
 
 describe("App timeline", () => {
-  it("renders reasoning before markdown and collapses thinking when text starts", () => {
+  it("keeps Thinking expanded through the answer and collapses to Thought at turn end", () => {
     renderReady();
 
     host({
       kind: "event",
       sessionId: "session-1",
       event: {
-        type: "assistant/chunk",
+        type: "user/message",
         seq: 1,
         time: 1,
+        data: {
+          content: [{ type: "text", text: "hello" }],
+          source: { kind: "user" },
+        },
+      },
+    });
+    host({
+      kind: "event",
+      sessionId: "session-1",
+      event: {
+        type: "assistant/chunk",
+        seq: 2,
+        time: 2,
         data: {
           chunk: {
             type: "reasoning-delta",
@@ -974,12 +987,12 @@ describe("App timeline", () => {
       },
     });
 
-    expect(screen.getByRole("button", { name: "Think" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Thinking" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
     expect(
-      screen.getByLabelText("Think", { selector: "article" }),
+      screen.getByLabelText("Thinking", { selector: "article" }),
     ).toHaveTextContent("Latest thought");
 
     host({
@@ -987,23 +1000,37 @@ describe("App timeline", () => {
       sessionId: "session-1",
       event: {
         type: "assistant/chunk",
-        seq: 2,
-        time: 2,
+        seq: 3,
+        time: 3,
         data: {
           chunk: { type: "text-delta", index: 0, text: "## Final answer" },
         },
       },
     });
 
-    expect(screen.getByRole("button", { name: "Think" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Thinking" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "Final answer" }))
+      .toBeVisible();
+
+    host({
+      kind: "event",
+      sessionId: "session-1",
+      event: {
+        type: "turn/end",
+        seq: 4,
+        time: 4,
+        data: { turn: 1 },
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Thought" })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
-    const collapsedThinking = screen.getByLabelText("Think", {
-      selector: "article",
-    });
-    expect(collapsedThinking).toHaveTextContent("First thought");
-    expect(collapsedThinking).not.toHaveTextContent("Latest thought");
+    expect(screen.queryByText("First thought")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "Final answer" }))
       .toBeVisible();
   });

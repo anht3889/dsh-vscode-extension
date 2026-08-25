@@ -25,7 +25,7 @@ The Chat stream shows the same work a person sees in Cursor, Copilot Chat, and D
 | Topic | Choice |
 | --- | --- |
 | Approach | Local timeline fold + optional Host-style `view` on the wire |
-| Thinking | Full streamed text in a Think disclosure; collapsed summary while running is the latest line; after the answer starts, the row collapses to the first line |
+| Thinking | One Thinking/Thought disclosure per user turn, under the user message, combining every reasoning segment from that turn; open as Thinking until the response finishes, then collapsed Thought |
 | Tools | Title + one-line summary + status by default; args and result behind expand |
 | Commands | Dedicated command card from `command/run` / `command/done`; not a user bubble |
 | Diffs | Diff tool rows sit in timeline order; Apply all diffs remains for the current turn |
@@ -148,7 +148,7 @@ A tool-only assistant step does not invent an empty assistant text row.
 
 ### 4.4 Row presentation
 
-**Thinking.** Disclosure titled Think. Collapsed: latest line while `running`, first line otherwise. Expanded: full `text`. Local UI state starts expanded while `running` and collapses when `running` becomes false (answer started or turn closed). The person may re-expand. Resume: historical thinking rows are collapsed.
+**Thinking.** `StreamView` groups every thinking row between one user message and the next into a single disclosure placed under that user message. The title is **Thinking** while any row in the turn is still running or streaming, otherwise **Thought**. Expanded: the joined reasoning text. Collapsed: the body is hidden. Local UI state starts expanded while the turn is active and collapses on the active-to-finished transition. The person may re-expand. Resume: historical groups are collapsed Thought.
 
 **Assistant text.** Existing markdown renderer. `streaming` may show a caret; not required for v1 of this feature.
 
@@ -173,7 +173,7 @@ Do not copy `toolRowModel` from ui-tool as a package. Port the small title/summa
 | Component | Role |
 | --- | --- |
 | `StreamView` | Renders `timeline` in order, then Apply all when `diffs.length > 0` |
-| `ThinkingRow` | Think disclosure |
+| `ThinkingRow` | Thinking/Thought disclosure for a turn's combined reasoning |
 | `ToolRow` | Collapsed summary + expand; hosts DiffView when diffs exist |
 | `CommandRow` | Slash-command card |
 | `ToolCard` | Retire or reduce to DiffView wrapper used by `ToolRow` |
@@ -216,7 +216,7 @@ Approvals stay `ApprovalBanner`. Header busy spinner stays turn-level (`status =
 
 ### StreamView
 
-- Think disclosure shows latest-line summary while running and first-line after collapse.
+- One Thinking/Thought disclosure per user turn sits under the user message, stays expanded until the response finishes, then collapses as Thought.
 - Tool row expand reveals args/result; collapsed does not.
 - Command row shows `/name` and expandable output.
 - Apply all still fires when current-turn diffs exist.
@@ -227,7 +227,7 @@ Update the extension README Chat section: thinking disclosure, tool rows, comman
 
 ## 9. Acceptance
 
-1. A turn that emits `reasoning-delta` then `text-delta` shows Think (streaming summary), then a collapsed Think plus markdown answer.
+1. A turn that emits `reasoning-delta` then `text-delta` shows Thinking expanded under the user message through the answer, then collapsed Thought after the turn ends.
 2. A bash (or other non-diff) tool shows a running row then a settled row; expand shows command/output or generic args/result.
 3. A file edit shows a tool row in order with expandable diff; Apply all still applies current-turn diffs.
 4. `/compact` or another slash command appears as a command card, not as a user message bubble.
