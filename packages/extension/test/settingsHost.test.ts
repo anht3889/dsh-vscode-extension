@@ -230,7 +230,7 @@ describe("VsCodeSettingsHost", () => {
 
     expect(executeCommand).toHaveBeenCalledWith(
       "workbench.action.openSettings",
-      "@ext:dsh.dsh",
+      "@ext:anhtra3889.dsh",
     );
   });
 

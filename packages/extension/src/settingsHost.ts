@@ -137,7 +137,7 @@ export class VsCodeSettingsHost implements SettingsHost {
   async openExtensionSettings(): Promise<void> {
     await vscode.commands.executeCommand(
       "workbench.action.openSettings",
-      "@ext:dsh.dsh",
+      "@ext:anhtra3889.dsh",
     );
   }
 

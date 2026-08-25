@@ -28,6 +28,7 @@ import * as vscode from "vscode";
 // Candidate extension ids. The scope is the npm package name (`@dsh-vscode/…`);
 // once a real `publisher` is set and published, the id becomes `<publisher>.<name>`.
 const CANDIDATE_IDS = [
+  "anhtra3889.dsh",
   "dsh.dsh",
   "@dsh-vscode/extension",
   "dsh.@dsh-vscode/extension",

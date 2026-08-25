@@ -3,7 +3,7 @@
   "displayName": "DeepSeek Harness",
   "description": "DeepSeek Harness control plane for VS Code — an AI coding agent chat sidecar.",
   "version": "0.1.0",
-  "publisher": "dsh",
+  "publisher": "anhtra3889",
   "license": "MIT",
   "icon": "resources/dsh.png",
   "type": "module",
